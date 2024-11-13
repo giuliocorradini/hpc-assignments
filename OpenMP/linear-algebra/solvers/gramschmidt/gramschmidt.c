@@ -78,7 +78,6 @@ IMPLEMENTAZIONI KERNEL
 
 /*Main computational kernel. The whole function will be timed,
   including the call and return. */
-
 #if VERSION == 0
 static void kernel_gramschmidt(int ni, int nj,
                               DATA_TYPE POLYBENCH_2D(A, NI, NJ, ni, nj),
@@ -139,16 +138,16 @@ static void kernel_gramschmidt(int ni, int nj,
     for (i = 0; i < _PB_NI; i++)
       Q[i][k] = A[i][k] / R[k][k];
 
-    //#pragma omp parallel for private(i) num_threads(4) schedule(static)
+    #pragma omp parallel for private(i) num_threads(4) schedule(static)
     for (j = k + 1; j < _PB_NJ; j++)
     {
       R[k][j] = 0;
 
-      #pragma omp parallel for reduction(+:R[k][j]) num_threads(4) schedule(static)
+      #pragma omp parallel for reduction(+:R[k][j]) num_threads(4) schedule(static) shared(A,Q) private(i)
       for (i = 0; i < _PB_NI; i++)
         R[k][j] += Q[i][k] * A[i][j];
 
-      #pragma omp parallel for num_threads(4) schedule(static)
+      #pragma omp parallel for num_threads(4) schedule(static) shared(Q,R) private(i) 
       for (i = 0; i < _PB_NI; i++)
         A[i][j] = A[i][j] - Q[i][k] * R[k][j];
     }
@@ -197,6 +196,50 @@ static void kernel_gramschmidt(int ni, int nj,
     }
   }
 }
+
+#elif VERSION == 3
+/*Si è osservato che l'algoritmo carica i dati iterando sulle righe della matrice, dunque può convenire 
+cambiare le matricei A e Q con le loro trasposte, a patto che la creazione di tali matrici valga l'ottimizzazzione
+ottenuta*/
+static void kernel_gramschmidt(int ni, int nj,
+                              DATA_TYPE POLYBENCH_2D(A, NJ, NI, nj, ni),
+                              DATA_TYPE POLYBENCH_2D(R, NJ, NJ, nj, nj),
+                              DATA_TYPE POLYBENCH_2D(Q, NI, NJ, ni, nj))
+{
+  int i, j, k;
+
+  DATA_TYPE nrm;
+
+  for (k = 0; k < _PB_NJ; k++)
+  {
+    nrm = 0;
+    
+    #pragma omp parallel for reduction(+:nrm) num_threads(4) schedule(static) shared(A) private(i)
+    for (j = 0; j < _PB_NJ; j++)
+      nrm += A[k][j] * A[k][j];
+
+    R[k][k] = sqrt(nrm);
+
+    #pragma omp parallel for num_threads(4) schedule(static) shared(A) private(i)
+    for (i = 0; i < _PB_NI; i++)
+      Q[i][k] = A[i][k] / R[k][k];
+
+    #pragma omp parallel for private(i) num_threads(4) schedule(static)
+    for (j = k + 1; j < _PB_NJ; j++)
+    {
+      R[k][j] = 0;
+
+      #pragma omp parallel for reduction(+:R[k][j]) num_threads(4) schedule(static) shared(A,Q) private(i)
+      for (i = 0; i < _PB_NI; i++)
+        R[k][j] += Q[i][k] * A[i][j];
+
+      #pragma omp parallel for num_threads(4) schedule(static) shared(Q,R) private(i) 
+      for (i = 0; i < _PB_NI; i++)
+        A[i][j] = A[i][j] - Q[i][k] * R[k][j];
+    }
+  }
+}
+
 #endif
 
 int main(int argc, char **argv)
