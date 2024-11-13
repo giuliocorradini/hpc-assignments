@@ -66,7 +66,6 @@ static void print_array(int ni, int nj,
 
 /*Main computational kernel. The whole function will be timed,
   including the call and return. */
-
 //parallel version
 /* static void kernel_gramschmidt(int ni, int nj,
                               DATA_TYPE POLYBENCH_2D(A, NI, NJ, ni, nj),
@@ -121,38 +120,35 @@ static void kernel_gramschmidt(int ni, int nj,
   for (k = 0; k < _PB_NJ; k++)
   {
     #pragma omp target data map(to: A[0:_PB_NI][k:_PB_NJ]) map(from:R[0:_PB_NJ][0:_PB_NJ])
+    #pragma omp target teams
     {
       nrm = 0;
-      #pragma omp  parallel for reduction(+:nrm)
+      #pragma omp distribute parallel for reduction(+:nrm)
       for (i = 0; i < _PB_NI; i++)
         nrm += A[i][k] * A[i][k];
     
       R[k][k] = sqrt(nrm);
     }
-      #pragma omp parallel for num_threads(4) schedule(static)
+
+    for (i = 0; i < _PB_NI; i++)
+      Q[i][k] = A[i][k] / R[k][k];
+
+  
+    for (j = k + 1; j < _PB_NJ; j++)
+    {
+      R[k][j] = 0;
+
       for (i = 0; i < _PB_NI; i++)
-        Q[i][k] = A[i][k] / R[k][k];
+        R[k][j] += Q[i][k] * A[i][j];
 
-    
-      #pragma omp parallel for private(i) num_threads(4) schedule(static)
-      for (j = k + 1; j < _PB_NJ; j++)
-      {
-        R[k][j] = 0;
-
-        #pragma omp parallel for reduction(+:R[k][j]) num_threads(4) schedule(static)
-        for (i = 0; i < _PB_NI; i++)
-          R[k][j] += Q[i][k] * A[i][j];
-
-        #pragma omp parallel for num_threads(4) schedule(static)
-        for (i = 0; i < _PB_NI; i++)
-          A[i][j] = A[i][j] - Q[i][k] * R[k][j];
-      }
-    
+      for (i = 0; i < _PB_NI; i++)
+        A[i][j] = A[i][j] - Q[i][k] * R[k][j];
+    }
   }
 }
-#pragma omp end declare target
-/*//Sequential
-static void kernel_gramschmidt(int ni, int nj,
+
+//Sequential
+/* static void kernel_gramschmidt(int ni, int nj,
                               DATA_TYPE POLYBENCH_2D(A, NI, NJ, ni, nj),
                               DATA_TYPE POLYBENCH_2D(R, NJ, NJ, nj, nj),
                               DATA_TYPE POLYBENCH_2D(Q, NI, NJ, ni, nj))
