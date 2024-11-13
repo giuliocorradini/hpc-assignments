@@ -64,10 +64,21 @@ static void print_array(int ni, int nj,
   fprintf(stderr, "\n");
 }
 
+/********************* 
+
+IMPLEMENTAZIONI KERNEL
+
+**********************/
+
+//#define SEQUENTIAL
+#define PARALLELO
+//#define OFFLOADING
+
 /*Main computational kernel. The whole function will be timed,
   including the call and return. */
-//parallel version
-/* static void kernel_gramschmidt(int ni, int nj,
+
+#ifdef SEQUENTIAL
+static void kernel_gramschmidt(int ni, int nj,
                               DATA_TYPE POLYBENCH_2D(A, NI, NJ, ni, nj),
                               DATA_TYPE POLYBENCH_2D(R, NJ, NJ, nj, nj),
                               DATA_TYPE POLYBENCH_2D(Q, NI, NJ, ni, nj))
@@ -80,13 +91,51 @@ static void print_array(int ni, int nj,
   {
     nrm = 0;
     
-    #pragma omp parallel for reduction(+:nrm) num_threads(4) schedule(static)
     for (i = 0; i < _PB_NI; i++)
       nrm += A[i][k] * A[i][k];
 
     R[k][k] = sqrt(nrm);
 
-    #pragma omp parallel for num_threads(4) schedule(static)
+    for (i = 0; i < _PB_NI; i++)
+      Q[i][k] = A[i][k] / R[k][k];
+
+    for (j = k + 1; j < _PB_NJ; j++)
+    {
+      R[k][j] = 0;
+
+      for (i = 0; i < _PB_NI; i++)
+        R[k][j] += Q[i][k] * A[i][j];
+
+      for (i = 0; i < _PB_NI; i++)
+        A[i][j] = A[i][j] - Q[i][k] * R[k][j];
+    }
+  }
+}
+
+#endif
+
+#ifdef PARALLELO
+//parallel version
+static void kernel_gramschmidt(int ni, int nj,
+                              DATA_TYPE POLYBENCH_2D(A, NI, NJ, ni, nj),
+                              DATA_TYPE POLYBENCH_2D(R, NJ, NJ, nj, nj),
+                              DATA_TYPE POLYBENCH_2D(Q, NI, NJ, ni, nj))
+{
+  int i, j, k;
+
+  DATA_TYPE nrm;
+
+  for (k = 0; k < _PB_NJ; k++)
+  {
+    nrm = 0;
+    
+    #pragma omp parallel for reduction(+:nrm) num_threads(4) schedule(static) shared(A) private(i)
+    for (i = 0; i < _PB_NI; i++)
+      nrm += A[i][k] * A[i][k];
+
+    R[k][k] = sqrt(nrm);
+
+    #pragma omp parallel for num_threads(4) schedule(static) shared(A) private(i)
     for (i = 0; i < _PB_NI; i++)
       Q[i][k] = A[i][k] / R[k][k];
 
@@ -104,8 +153,11 @@ static void print_array(int ni, int nj,
         A[i][j] = A[i][j] - Q[i][k] * R[k][j];
     }
   }
-} */
+}
 
+#endif
+
+#ifdef OFFLOADING
 //let's try offloading
 #pragma omp declare target
 static void kernel_gramschmidt(int ni, int nj,
@@ -119,21 +171,22 @@ static void kernel_gramschmidt(int ni, int nj,
 
   for (k = 0; k < _PB_NJ; k++)
   {
-    #pragma omp target data map(to: A[0:_PB_NI][k:_PB_NJ]) map(from:R[0:_PB_NJ][0:_PB_NJ])
-    #pragma omp target teams
+    #pragma omp target data map(to: A[0:_PB_NI][k:_PB_NJ]) map(from:R[0:_PB_NJ][0:_PB_NJ],Q[0:_PB_NI][k:_PB_NJ])
+    #pragma omp target teams num_teams(_PB_NI/omp_get_max_threads()) thread_limit(_PB_NI/omp_get_max_threads())
     {
       nrm = 0;
-      #pragma omp distribute parallel for reduction(+:nrm)
+      #pragma omp distribute parallel for reduction(+:nrm) shared(A)
       for (i = 0; i < _PB_NI; i++)
         nrm += A[i][k] * A[i][k];
     
       R[k][k] = sqrt(nrm);
+    
+      #pragma omp distribute parallel for reduction(+:nrm) shared(A)
+      for (i = 0; i < _PB_NI; i++)
+        Q[i][k] = A[i][k] / R[k][k];
+
     }
 
-    for (i = 0; i < _PB_NI; i++)
-      Q[i][k] = A[i][k] / R[k][k];
-
-  
     for (j = k + 1; j < _PB_NJ; j++)
     {
       R[k][j] = 0;
@@ -147,40 +200,8 @@ static void kernel_gramschmidt(int ni, int nj,
   }
 }
 
-//Sequential
-/* static void kernel_gramschmidt(int ni, int nj,
-                              DATA_TYPE POLYBENCH_2D(A, NI, NJ, ni, nj),
-                              DATA_TYPE POLYBENCH_2D(R, NJ, NJ, nj, nj),
-                              DATA_TYPE POLYBENCH_2D(Q, NI, NJ, ni, nj))
-{
-  int i, j, k;
+#endif
 
-  DATA_TYPE nrm;
-
-  for (k = 0; k < _PB_NJ; k++)
-  {
-    nrm = 0;
-    
-    for (i = 0; i < _PB_NI; i++)
-      nrm += A[i][k] * A[i][k];
-
-    R[k][k] = sqrt(nrm);
-
-    for (i = 0; i < _PB_NI; i++)
-      Q[i][k] = A[i][k] / R[k][k];
-
-    for (j = k + 1; j < _PB_NJ; j++)
-    {
-      R[k][j] = 0;
-
-      for (i = 0; i < _PB_NI; i++)
-        R[k][j] += Q[i][k] * A[i][j];
-
-      for (i = 0; i < _PB_NI; i++)
-        A[i][j] = A[i][j] - Q[i][k] * R[k][j];
-    }
-  }
-} */
 
 int main(int argc, char **argv)
 {
