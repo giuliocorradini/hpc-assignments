@@ -70,14 +70,16 @@ IMPLEMENTAZIONI KERNEL
 
 **********************/
 
-//#define SEQUENTIAL
-#define PARALLELO
+//0 = sequenziale, 1 = parallelo, 2 = offloading
+#ifndef VERSION
+#define VERSION 0
+#endif
 //#define OFFLOADING
 
 /*Main computational kernel. The whole function will be timed,
   including the call and return. */
 
-#ifdef SEQUENTIAL
+#if VERSION == 0
 static void kernel_gramschmidt(int ni, int nj,
                               DATA_TYPE POLYBENCH_2D(A, NI, NJ, ni, nj),
                               DATA_TYPE POLYBENCH_2D(R, NJ, NJ, nj, nj),
@@ -112,9 +114,7 @@ static void kernel_gramschmidt(int ni, int nj,
   }
 }
 
-#endif
-
-#ifdef PARALLELO
+#elif VERSION == 1
 //parallel version
 static void kernel_gramschmidt(int ni, int nj,
                               DATA_TYPE POLYBENCH_2D(A, NI, NJ, ni, nj),
@@ -139,7 +139,7 @@ static void kernel_gramschmidt(int ni, int nj,
     for (i = 0; i < _PB_NI; i++)
       Q[i][k] = A[i][k] / R[k][k];
 
-    #pragma omp parallel for private(i) num_threads(4) schedule(static)
+    //#pragma omp parallel for private(i) num_threads(4) schedule(static)
     for (j = k + 1; j < _PB_NJ; j++)
     {
       R[k][j] = 0;
@@ -155,9 +155,7 @@ static void kernel_gramschmidt(int ni, int nj,
   }
 }
 
-#endif
-
-#ifdef OFFLOADING
+#elif VERSION == 2
 //let's try offloading
 #pragma omp declare target
 static void kernel_gramschmidt(int ni, int nj,
@@ -199,9 +197,7 @@ static void kernel_gramschmidt(int ni, int nj,
     }
   }
 }
-
 #endif
-
 
 int main(int argc, char **argv)
 {
