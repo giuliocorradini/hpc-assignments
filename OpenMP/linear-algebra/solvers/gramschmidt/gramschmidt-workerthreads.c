@@ -80,52 +80,37 @@ static void kernel_gramschmidt(int ni, int nj,
 
   DATA_TYPE nrm;
 
-#pragma omp parallel num_threads(NTHREADS)
+  #pragma omp parallel num_threads(NTHREADS) private(i, j, k)        //spawn a group of threads
   {
+        #pragma omp single
+        for (k = 0; k < _PB_NJ; k++)
+        {
+            nrm = 0;
 
-    #pragma omp single
-    for (k = 0; k < _PB_NJ; k++)
-    {
-      // Consideriamo la colonna k-esima di A
-      nrm = 0;
+            #pragma omp taskloop shared(nrm) 
+            for (i = 0; i < _PB_NI; i++)
+                nrm += A[i][k] * A[i][k];
 
-//  Calcoliamo la norma di A^(k)
-#pragma omp parallel for simd reduction(+ : nrm)
-      for (i = 0; i < _PB_NI; i++)
-        nrm += A[i][k] * A[i][k];
+            R[k][k] = sqrt(nrm);
 
-      //  che viene salvata in nel k-esimo elemento diagonale di R
-      R[k][k] = sqrt(nrm);
+            #pragma omp taskloop
+            for (i = 0; i < _PB_NI; i++)
+                Q[i][k] = A[i][k] / R[k][k];
 
-// la k-esima colonna di Q è la normalizzazione della k-esima colonna di A
-// R[k][k] è una very busy expression
-// qui puoi fare un parallel for su più thread (con anche le SIMD)
-// Possiamo dividere il lavoro per righe (ovvero dividiamo lo spazio di iterazione di i)
-//  usiamo più linee di cache (nei vari processori) ma non dovremmo avere problemi di snooping
-#pragma omp parallel for simd
-      for (i = 0; i < _PB_NI; i++)
-        Q[i][k] = A[i][k] / R[k][k];
+          #pragma omp taskloop
+          for (j = k + 1; j < _PB_NJ; j++)
+          {
+            R[k][j] = 0;
 
-// Per ogni colonna successiva alla k-esima (definita nell'outer loop)
-// anche questo possiamo parallelizzarlo su più thread, perché ogni colonna è tratta indipendentemente
-#pragma omp parallel for
-      for (j = k + 1; j < _PB_NJ; j++)
-      {
-        R[k][j] = 0;
+            for (i = 0; i < _PB_NI; i++)
+              R[k][j] += Q[i][k] * A[i][j];
 
-// R alla riga k, colonna j è il prodotto della k-esima colonna di Q per la j-esima colonna di A
-//    sto lavorando per colonne... non il top per la cache
-#pragma omp simd reduction(+ : R[k][j])
-        for (i = 0; i < _PB_NI; i++)
-          R[k][j] += Q[i][k] * A[i][j];
-
-// aggiorno la colonna i-esima di A con il prodotto element-wise tra colonna k-esima di Q e j-esima di R
-#pragma omp simd
-        for (i = 0; i < _PB_NI; i++)
-          A[i][j] = A[i][j] - Q[i][k] * R[k][j];
+            for (i = 0; i < _PB_NI; i++)
+              A[i][j] = A[i][j] - Q[i][k] * R[k][j];
+          }
+        }
       }
-    }
-  }
+    
 }
 
 int main(int argc, char **argv)
