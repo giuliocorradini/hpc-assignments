@@ -64,6 +64,18 @@ static void print_array(int ni, int nj,
   fprintf(stderr, "\n");
 }
 
+/**Funzione per trasformare la matrice in trasposta */
+static void transponi_matrice(int ni, int nj,
+                              DATA_TYPE M[_PB_NI][_PB_NJ],
+                              DATA_TYPE M_T[_PB_NJ][_PB_NI])
+{
+  //read M by row so we avoid caches miss
+  for(int i = 0; i < ni*nj; i++){
+    M_T[i/nj][i/ni] = M[i/ni][i/nj];
+  }
+
+}
+
 /********************* 
 
 IMPLEMENTAZIONI KERNEL
@@ -198,6 +210,7 @@ static void kernel_gramschmidt(int ni, int nj,
 }
 
 #elif VERSION == 3
+
 /*Si è osservato che l'algoritmo carica i dati iterando sulle righe della matrice, dunque può convenire 
 cambiare le matricei A e Q con le loro trasposte, a patto che la creazione di tali matrici valga l'ottimizzazzione
 ottenuta*/
@@ -209,6 +222,12 @@ static void kernel_gramschmidt(int ni, int nj,
   int i, j, k;
 
   DATA_TYPE nrm;
+
+  DATA_TYPE A_T[_PB_NJ][_PB_NI];
+  DATA_TYPE Q_T[_PB_NJ][_PB_NI];
+
+  transponi_matrice(_PB_NI,_PB_NJ,A, A_T);
+  transponi_matrice(_PB_NI,_PB_NJ,Q, Q_T);
 
   for (k = 0; k < _PB_NJ; k++)
   {
