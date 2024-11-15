@@ -70,9 +70,11 @@ static void transponi_matrice(int ni, int nj,
                               DATA_TYPE M_T[_PB_NJ][_PB_NI])
 {
   //read M by row so we avoid caches miss
-  #pragma omp parallel for num_threads(4) schedule(static) shared(M,ni,nj)
-  for(int i = 0; i < ni*nj; i++){
-    M_T[i/nj][i/ni] = M[i/ni][i/nj];
+  #pragma omp parallel for num_threads(4) schedule(static) shared(M)
+  for(int i = 0; i < _PB_NI; i++){
+   for(int j = 0; j < _PB_NJ; j++){
+      M_T[j][i] = M[i][j];
+   }
   }
 
 }
