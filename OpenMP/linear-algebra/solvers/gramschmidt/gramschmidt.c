@@ -70,6 +70,7 @@ static void transponi_matrice(int ni, int nj,
                               DATA_TYPE M_T[_PB_NJ][_PB_NI])
 {
   //read M by row so we avoid caches miss
+  #pragma omp parallel for num_threads(4) schedule(static) shared(M,ni,nj)
   for(int i = 0; i < ni*nj; i++){
     M_T[i/nj][i/ni] = M[i/ni][i/nj];
   }
@@ -233,28 +234,28 @@ static void kernel_gramschmidt(int ni, int nj,
   {
     nrm = 0;
     
-    #pragma omp parallel for reduction(+:nrm) num_threads(4) schedule(static) shared(A) private(i)
-    for (j = 0; j < _PB_NJ; j++)
-      nrm += A[k][j] * A[k][j];
+    #pragma omp parallel for reduction(+:nrm) num_threads(4) schedule(static) shared(A_T) private(i)
+    for (i = 0; i < _PB_NJ; i++)
+      nrm += A_T[i][k] * A_T[i][k];
 
     R[k][k] = sqrt(nrm);
 
     #pragma omp parallel for num_threads(4) schedule(static) shared(A) private(i)
-    for (i = 0; i < _PB_NI; i++)
-      Q[i][k] = A[i][k] / R[k][k];
+    for (i = 0; i < _PB_NJ; i++)
+      Q[k][i] = A[k][i] / R[k][k];
 
     #pragma omp parallel for private(i) num_threads(4) schedule(static)
-    for (j = k + 1; j < _PB_NJ; j++)
+    for (j = k + 1; j < _PB_NI; j++)
     {
-      R[k][j] = 0;
+      R[j][k] = 0;
 
       #pragma omp parallel for reduction(+:R[k][j]) num_threads(4) schedule(static) shared(A,Q) private(i)
       for (i = 0; i < _PB_NI; i++)
-        R[k][j] += Q[i][k] * A[i][j];
+        R[k][j] += Q[k][i] * A[j][i];
 
       #pragma omp parallel for num_threads(4) schedule(static) shared(Q,R) private(i) 
-      for (i = 0; i < _PB_NI; i++)
-        A[i][j] = A[i][j] - Q[i][k] * R[k][j];
+      for (i = 0; i < _PB_NJ; i++)
+        A[j][i] = A[j][i] - Q[k][i] * R[k][j];
     }
   }
 }
