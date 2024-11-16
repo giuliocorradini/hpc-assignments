@@ -32,3 +32,8 @@ echo "Testing worker threads"
 prepare_src gramschmidt-workerthreads.c
 compile > /dev/null
 run 5 times
+
+echo "Testing transpose threads"
+prepare_src gramschmidt-transpose.c
+compile > /dev/null
+run 5 times
