@@ -1,6 +1,8 @@
 #!/bin/bash
 
-BENCHMARK_RESULTS_FILE=results.txt
+BENCHMARK_RESULTS_FILE=profile-results.txt
+
+rm $BENCHMARK_RESULTS_FILE
 
 # Copy the specified file in place of gramschmidt.c
 function prepare_src() {
@@ -14,26 +16,28 @@ function compile() {
 
 function run() {
     for r in $(seq $1); do
-        ./gramschmidt_acc | tee -a $BENCHMARK_RESULTS_FILE
+        perf stat -r 5 -e cache-misses,cache-references,L1-dcache-loads,L1-dcache-load-misses,L1-dcache-stores -o temp_r.txt ./gramschmidt_acc
+        cat temp_r.txt >> $BENCHMARK_RESULTS_FILE
+        rm temp_r.txt
     done
 }
 
 echo "Testing base version"
 prepare_src gramschmidt-original.c
 compile > /dev/null
-run 5 times
+run 1 times
 
 echo "Testing static-optimized version"
 prepare_src gramschmidt-static-opt.c
 compile > /dev/null
-run 5 times
+run 1 times
 
 echo "Testing worker threads"
 prepare_src gramschmidt-workerthreads.c
 compile > /dev/null
-run 5 times
+run 1 times
 
 echo "Testing transpose threads"
 prepare_src gramschmidt-transpose.c
 compile > /dev/null
-run 5 times
+run 1 times

@@ -10,6 +10,8 @@
 /* Default data type is double, default size is 512. */
 #include "gramschmidt.h"
 
+#define NTHREADS 4
+
 /* Array initialization. */
 static void init_array(int ni, int nj,
                        DATA_TYPE POLYBENCH_2D(A, NI, NJ, ni, nj),
@@ -76,15 +78,15 @@ static void transponi_matrice(int ni, int nj,
                               DATA_TYPE M_T[_PB_NJ][_PB_NI])
 {
   //read M by row so we avoid caches miss
-  #pragma omp parallel for num_threads(4) schedule(static) shared(M)
+  #pragma omp parallel for simd num_threads(NTHREADS) schedule(static) collapse(2)
   for(int i = 0; i < _PB_NI; i++){
-    #pragma omp parallel for num_threads(4) schedule(static) shared(M)
    for(int j = 0; j < _PB_NJ; j++){
       M_T[j][i] = M[i][j];
    }
   }
 
 }
+
 /*Main computational kernel. The whole function will be timed,
   including the call and return. */
 
@@ -108,32 +110,40 @@ static void kernel_gramschmidt(int ni, int nj,
 
   for (k = 0; k < _PB_NJ; k++)
   {
+   // Consideriamo la colonna k-esima di A
     nrm = 0;
-    
-    #pragma omp parallel for reduction(+:nrm) num_threads(4) schedule(static) shared(A_T) private(i)
-    for (i = 0; i < _PB_NJ; i++)
-      nrm += A_T[i][k] * A_T[i][k];
 
+    //  Calcoliamo la norma di A^(k)
+    #pragma omp parallel for simd reduction(+:nrm) 
+    for (i = 0; i < _PB_NI; i++)
+      nrm += A_T[k][i] * A_T[k][i];
+
+    //  che viene salvata in nel k-esimo elemento diagonale di R
     R[k][k] = sqrt(nrm);
 
-    #pragma omp parallel for num_threads(4) schedule(static) shared(A) private(i)
-    for (i = 0; i < _PB_NJ; i++)
+    #pragma omp parallel for simd num_threads(NTHREADS) schedule(static)
+    for (i = 0; i < _PB_NI; i++)
       Q[k][i] = A[k][i] / R[k][k];
 
-    #pragma omp parallel for private(i) num_threads(4) schedule(static)
-    for (j = k + 1; j < _PB_NI; j++)
-    {
-      R[j][k] = 0;
 
-      #pragma omp parallel for reduction(+:R[k][j]) num_threads(4) schedule(static) shared(A,Q) private(i)
+    #pragma omp parallel for schedule(static) num_threads(NTHREADS)
+    for (j = k + 1; j < _PB_NJ; j++)
+    {
+      R[k][j] = 0;
+
+      // R alla riga k, colonna j è il prodotto della k-esima colonna di Q per la j-esima colonna di A
+      //reduction
+      #pragma omp parallel for simd reduction(+ : R[k][j])
       for (i = 0; i < _PB_NI; i++)
         R[k][j] += Q[k][i] * A[j][i];
 
-      #pragma omp parallel for num_threads(4) schedule(static) shared(Q,R) private(i) 
-      for (i = 0; i < _PB_NJ; i++)
+      // aggiorno la colonna i-esima di A con il prodotto element-wise tra colonna k-esima di Q e j-esima di R
+      #pragma omp parallel for simd schedule(static) num_threads(NTHREADS)
+      for (i = 0; i < _PB_NI; i++)
         A[j][i] = A[j][i] - Q[k][i] * R[k][j];
     }
   }
+
 }
 
 int main(int argc, char **argv)
