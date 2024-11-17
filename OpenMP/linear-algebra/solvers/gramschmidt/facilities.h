@@ -94,3 +94,18 @@ static void facilities_kernel_gs(int ni, int nj,
   }
 }
 
+
+#include <assert.h>
+
+static void facilities_compare_results(int ni, int nj, DATA_TYPE POLYBENCH_2D(X, NI, NJ, ni, nj), DATA_TYPE POLYBENCH_2D(X_cmp, NI, NJ, ni, nj)) {
+    #ifdef COMPARE_RESULTS
+    for (int i=0; i<ni; i++) {
+        for (int j=0; j<nj; j++) {
+            if (X[i][j] - X_cmp[i][j] < 10e-3) {
+                   fprintf(stderr, "Different value at (%d, %d)\n", i, j); 
+                    assert(0);
+            }
+        }
+    }
+    #endif
+}
