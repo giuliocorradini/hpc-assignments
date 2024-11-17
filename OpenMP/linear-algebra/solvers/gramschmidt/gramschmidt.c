@@ -23,7 +23,7 @@ static void init_array(int ni, int nj,
   for (i = 0; i < ni; i++)
     for (j = 0; j < nj; j++)
     {
-      A[i][j] = ((DATA_TYPE)i * j) / ni;
+      A[i][j] = ((DATA_TYPE)(i+1) * (j+1)) / ni;
       Q[i][j] = ((DATA_TYPE)i * (j + 1)) / nj;
     }
   for (i = 0; i < nj; i++)
@@ -41,32 +41,41 @@ static void print_array(int ni, int nj,
   int i, j;
 
     fprintf(stderr, "A\n");
-  for (i = 0; i < ni; i++)
-    for (j = 0; j < nj; j++)
-    {
-      fprintf(stderr, DATA_PRINTF_MODIFIER, A[i][j]);
-      if (j % 20 == 0)
+
+      for (int i = 0; i < ni; i++) {
+        for (int j = 0; j < nj; j++)
+            fprintf(stderr, DATA_PRINTF_MODIFIER, A[i][j]);
         fprintf(stderr, "\n");
-    }
-  fprintf(stderr, "\n");
-    fprintf(stderr, "R\n");
-  for (i = 0; i < nj; i++)
-    for (j = 0; j < nj; j++)
-    {
-      fprintf(stderr, DATA_PRINTF_MODIFIER, R[i][j]);
-      if (j % 20 == 0)
-        fprintf(stderr, "\n");
-    }
-  fprintf(stderr, "\n");
+        }
+
+
     fprintf(stderr, "Q\n");
-  for (i = 0; i < ni; i++)
-    for (j = 0; j < nj; j++)
-    {
-      fprintf(stderr, DATA_PRINTF_MODIFIER, Q[i][j]);
-      if (j % 20 == 0)
+
+      for (int i = 0; i < ni; i++) {
+        for (int j = 0; j < nj; j++)
+            fprintf(stderr, DATA_PRINTF_MODIFIER, Q[i][j]);
         fprintf(stderr, "\n");
+        }
+
+    fprintf(stderr, "R\n");
+
+      for (int i = 0; i < nj; i++) {
+        for (int j = 0; j < nj; j++)
+            fprintf(stderr, DATA_PRINTF_MODIFIER, R[i][j]);
+        fprintf(stderr, "\n");
+        }
+
+}
+
+
+static void print_matrix(int ni, int nj,
+                        DATA_TYPE POLYBENCH_2D(A, NI, NJ, ni, nj))
+{
+  for (int i = 0; i < ni; i++) {
+    for (int j = 0; j < nj; j++)
+        fprintf(stderr, DATA_PRINTF_MODIFIER, A[i][j]);
+    printf("\n");
     }
-  fprintf(stderr, "\n");
 }
 
 /* Main computational kernel. The whole function will be timed,
@@ -78,16 +87,15 @@ static void kernel_gramschmidt(int ni, int nj,
 {
   int i, j, k;
 
-  DATA_TYPE nrm;
+    DATA_TYPE nrm;
 
-  #pragma omp parallel num_threads(NTHREADS)
-  for (k = 0; k < _PB_NJ; k++)
+      for (k = 0; k < _PB_NJ; k++)
   {
     // Consideriamo la colonna k-esima di A
     nrm = 0;
 
     //  Calcoliamo la norma di A^(k)
-    #pragma omp for simd reduction(+:nrm) 
+    #pragma omp parallel for simd reduction(+:nrm) 
     for (i = 0; i < _PB_NI; i++)
       nrm += A[i][k] * A[i][k];
 
@@ -99,25 +107,27 @@ static void kernel_gramschmidt(int ni, int nj,
     // qui puoi fare un parallel for su più thread (con anche le SIMD)
     // Possiamo dividere il lavoro per righe (ovvero dividiamo lo spazio di iterazione di i)
     //  usiamo più linee di cache (nei vari processori) ma non dovremmo avere problemi di snooping
-    #pragma omp for simd 
+    #pragma omp parallel for simd num_threads(NTHREADS) schedule(static)
     for (i = 0; i < _PB_NI; i++)
       Q[i][k] = A[i][k] / R[k][k];
 
     // Per ogni colonna successiva alla k-esima (definita nell'outer loop)
     // anche questo possiamo parallelizzarlo su più thread, perché ogni colonna è tratta indipendentemente
-    #pragma omp for
+    #pragma omp parallel for schedule(static) num_threads(NTHREADS)
     for (j = k + 1; j < _PB_NJ; j++)
     {
       R[k][j] = 0;
 
       // R alla riga k, colonna j è il prodotto della k-esima colonna di Q per la j-esima colonna di A
+      //reduction
       //    sto lavorando per colonne... non il top per la cache
-      #pragma omp simd reduction(+ : R[k][j])
+      #pragma omp parallel for simd reduction(+ : R[k][j])
       for (i = 0; i < _PB_NI; i++)
         R[k][j] += Q[i][k] * A[i][j];
 
       // aggiorno la colonna i-esima di A con il prodotto element-wise tra colonna k-esima di Q e j-esima di R
-      #pragma omp simd
+      // reduction
+      #pragma omp parallel for simd schedule(static) num_threads(NTHREADS)
       for (i = 0; i < _PB_NI; i++)
         A[i][j] = A[i][j] - Q[i][k] * R[k][j];
     }
@@ -144,13 +154,6 @@ int main(int argc, char **argv)
              POLYBENCH_ARRAY(R),
              POLYBENCH_ARRAY(Q));
 
-
-/*  init_array(ni, nj,
-             POLYBENCH_ARRAY(A_gs),
-             POLYBENCH_ARRAY(R_gs),
-             POLYBENCH_ARRAY(Q_gs));*/
-
-
   /* Start timer. */
   polybench_start_instruments;
 
@@ -163,13 +166,9 @@ int main(int argc, char **argv)
   polybench_stop_instruments;
   polybench_print_instruments;
 
-  polybench_prevent_dce(print_array(ni, nj, POLYBENCH_ARRAY(A), POLYBENCH_ARRAY(R), POLYBENCH_ARRAY(Q)));
-  /* Run golden standard */
-
   /* Prevent dead-code elimination. All live-out data must be printed
      by the function call in argument. */
   polybench_prevent_dce(print_array(ni, nj, POLYBENCH_ARRAY(A), POLYBENCH_ARRAY(R), POLYBENCH_ARRAY(Q)));
-
 
   /* Be clean. */
   POLYBENCH_FREE_ARRAY(A);
