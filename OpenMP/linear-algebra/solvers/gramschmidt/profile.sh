@@ -13,7 +13,7 @@ function prepare_src() {
 }
 
 function compile() {
-    make EXT_CFLAGS="-DPOLYBENCH_TIME" clean all
+    make EXT_CFLAGS="-DPOLYBENCH_TIME $1" clean all
 }
 
 function run() {
@@ -35,7 +35,17 @@ prepare_src gramschmidt-workerthreads.c
 compile > /dev/null
 run 1 times
 
-echo "Testing transpose threads"
+echo "Testing transpose sequential"
 prepare_src gramschmidt-transpose.c
 compile > /dev/null
+run 1 times
+
+echo "Testing transpose static work"
+prepare_src gramschmidt-transpose.c
+compile "-DOPTIMIZATION=static" > /dev/null
+run 1 times
+
+echo "Testing transpose workerthreads"
+prepare_src gramschmidt-transpose.c
+compile "-DOPTIMIZATION=workerthreads" > /dev/null
 run 1 times
