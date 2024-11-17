@@ -2,6 +2,7 @@
 #include <unistd.h>
 #include <string.h>
 #include <math.h>
+#include "facilities.h"
 
 /* Include polybench common header. */
 #include <polybench.h>
@@ -158,6 +159,27 @@ int main(int argc, char **argv)
      by the function call in argument. */
   polybench_prevent_dce(print_array(ni, nj, POLYBENCH_ARRAY(A), POLYBENCH_ARRAY(R), POLYBENCH_ARRAY(Q)));
 
+
+  #ifdef COMPARE_RESULTS
+    POLYBENCH_2D_ARRAY_DECL(A2, DATA_TYPE, NI, NJ, ni, nj);
+  POLYBENCH_2D_ARRAY_DECL(R2, DATA_TYPE, NJ, NJ, nj, nj);
+  POLYBENCH_2D_ARRAY_DECL(Q2, DATA_TYPE, NI, NJ, ni, nj);
+
+    init_array(ni, nj,
+             POLYBENCH_ARRAY(A2),
+             POLYBENCH_ARRAY(R2),
+             POLYBENCH_ARRAY(Q2));
+
+
+  facilities_kernel_gs(ni, nj,
+                     POLYBENCH_ARRAY(A2),
+                     POLYBENCH_ARRAY(R2),
+                     POLYBENCH_ARRAY(Q2));
+
+    facilities_compare_results(ni, nj, POLYBENCH_ARRAY(A), POLYBENCH_ARRAY(A2));
+    facilities_compare_results(nj, nj, POLYBENCH_ARRAY(R), POLYBENCH_ARRAY(R2));
+    facilities_compare_results(ni, nj, POLYBENCH_ARRAY(Q), POLYBENCH_ARRAY(Q2));
+  #endif
 
   /* Be clean. */
   POLYBENCH_FREE_ARRAY(A);
