@@ -113,7 +113,7 @@ static void kernel_gramschmidt(int ni, int nj,
 
     // Per ogni colonna successiva alla k-esima (definita nell'outer loop)
     // anche questo possiamo parallelizzarlo su più thread, perché ogni colonna è tratta indipendentemente
-    #pragma omp parallel for schedule(static) num_threads(NTHREADS)
+    #pragma omp parallel for schedule(static) num_threads(NTHREADS) shared(R, Q, A)
     for (j = k + 1; j < _PB_NJ; j++)
     {
       R[k][j] = 0;
@@ -121,20 +121,18 @@ static void kernel_gramschmidt(int ni, int nj,
       // R alla riga k, colonna j è il prodotto della k-esima colonna di Q per la j-esima colonna di A
       //reduction
       //    sto lavorando per colonne... non il top per la cache
-      #pragma omp parallel for simd reduction(+ : R[k][j])
-      for (i = 0; i < _PB_NI; i++)
+    for (i = 0; i < _PB_NI; i++)
         R[k][j] += Q[i][k] * A[i][j];
 
       // aggiorno la colonna i-esima di A con il prodotto element-wise tra colonna k-esima di Q e j-esima di R
       // reduction
-      #pragma omp parallel for simd schedule(static) num_threads(NTHREADS)
       for (i = 0; i < _PB_NI; i++)
         A[i][j] = A[i][j] - Q[i][k] * R[k][j];
     }
   }
 }
 
-
+#include "facilities.h"
 int main(int argc, char **argv)
 {
   /* Retrieve problem size. */
@@ -169,6 +167,27 @@ int main(int argc, char **argv)
   /* Prevent dead-code elimination. All live-out data must be printed
      by the function call in argument. */
   polybench_prevent_dce(print_array(ni, nj, POLYBENCH_ARRAY(A), POLYBENCH_ARRAY(R), POLYBENCH_ARRAY(Q)));
+
+  #ifdef COMPARE_RESULTS
+    POLYBENCH_2D_ARRAY_DECL(A2, DATA_TYPE, NI, NJ, ni, nj);
+  POLYBENCH_2D_ARRAY_DECL(R2, DATA_TYPE, NJ, NJ, nj, nj);
+  POLYBENCH_2D_ARRAY_DECL(Q2, DATA_TYPE, NI, NJ, ni, nj);
+
+    init_array(ni, nj,
+             POLYBENCH_ARRAY(A2),
+             POLYBENCH_ARRAY(R2),
+             POLYBENCH_ARRAY(Q2));
+
+
+  facilities_kernel_gs(ni, nj,
+                     POLYBENCH_ARRAY(A2),
+                     POLYBENCH_ARRAY(R2),
+                     POLYBENCH_ARRAY(Q2));
+
+    facilities_compare_results(ni, nj, POLYBENCH_ARRAY(A), POLYBENCH_ARRAY(A2));
+    facilities_compare_results(nj, nj, POLYBENCH_ARRAY(R), POLYBENCH_ARRAY(R2));
+    facilities_compare_results(ni, nj, POLYBENCH_ARRAY(Q), POLYBENCH_ARRAY(Q2));
+  #endif
 
   /* Be clean. */
   POLYBENCH_FREE_ARRAY(A);

@@ -101,8 +101,9 @@ static void facilities_compare_results(int ni, int nj, DATA_TYPE POLYBENCH_2D(X,
     #ifdef COMPARE_RESULTS
     for (int i=0; i<ni; i++) {
         for (int j=0; j<nj; j++) {
-            if (X[i][j] - X_cmp[i][j] < 10e-3) {
+            if (abs(X[i][j] - X_cmp[i][j]) > 10e-2) {
                    fprintf(stderr, "Different value at (%d, %d)\n", i, j); 
+                   fprintf(stderr, "%.5f %.5f\n", X[i][j], X_cmp[i][j]); 
                     assert(0);
             }
         }
