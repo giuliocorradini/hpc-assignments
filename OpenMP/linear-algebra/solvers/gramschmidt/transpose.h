@@ -4,15 +4,14 @@
 
 /**Funzione per trasformare la matrice in trasposta */
 static void transpose_matrix(int ni, int nj,
-   DATA_TYPE POLYBENCH_2D(M, NI, NJ, ni, nj),
-   DATA_TYPE POLYBENCH_2D(M_T, NJ, NI, nj, ni))
+   DATA_TYPE *M, DATA_TYPE *M_T)
 {
     // Transpose the matrix M, to read its columns into cache as rows
 
     #pragma omp parallel for simd num_threads(NTHREADS) schedule(static) collapse(2)
-      for(int i = 0; i < _PB_NI; i++){
-       for(int j = 0; j < _PB_NJ; j++){
-          M_T[j][i] = M[i][j];
+      for(int i = 0; i < ni; i++){
+       for(int j = 0; j < nj; j++){
+          M_T[j * nj + i] = M[i * ni + j];
        }
       }
 
@@ -56,6 +55,8 @@ static void kernel_gramschmidt(int ni, int nj,
         A_T[j][i] = A_T[j][i] - Q_T[k][i] * R[k][j];
     }
   }
+
+    transpose_matrix(ni, nj, Q_T, Q);
 }
 #elif OPTIMIZATION == static
 static void kernel_gramschmidt(int ni, int nj,
@@ -106,6 +107,7 @@ static void kernel_gramschmidt(int ni, int nj,
     }
   }
 
+  transpose_matrix(ni, nj, Q_T, Q);
 }
 #elif OPTIMIZATION == workerthreads
 static void kernel_gramschmidt(int ni, int nj,
@@ -155,5 +157,6 @@ static void kernel_gramschmidt(int ni, int nj,
       }
    }
   
+    transpose_matrix(ni, nj, Q_T, Q);
 }
 #endif //OPTIMIZATION
