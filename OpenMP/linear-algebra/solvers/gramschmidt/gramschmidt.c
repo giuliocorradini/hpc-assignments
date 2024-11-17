@@ -10,7 +10,9 @@
 /* Default data type is double, default size is 512. */
 #include "gramschmidt.h"
 
-#define NTHREADS (4)
+#define NTHREADS 4
+
+#include "transpose.h"  //< depends on NTHREADS definiton
 
 /* Array initialization. */
 static void init_array(int ni, int nj,
@@ -40,98 +42,30 @@ static void print_array(int ni, int nj,
 {
   int i, j;
 
-    fprintf(stderr, "A\n");
-
-      for (int i = 0; i < ni; i++) {
-        for (int j = 0; j < nj; j++)
-            fprintf(stderr, DATA_PRINTF_MODIFIER, A[i][j]);
-        fprintf(stderr, "\n");
-        }
-
-
-    fprintf(stderr, "Q\n");
-
-      for (int i = 0; i < ni; i++) {
-        for (int j = 0; j < nj; j++)
-            fprintf(stderr, DATA_PRINTF_MODIFIER, Q[i][j]);
-        fprintf(stderr, "\n");
-        }
-
-    fprintf(stderr, "R\n");
-
-      for (int i = 0; i < nj; i++) {
-        for (int j = 0; j < nj; j++)
-            fprintf(stderr, DATA_PRINTF_MODIFIER, R[i][j]);
-        fprintf(stderr, "\n");
-        }
-
-}
-
-
-static void print_matrix(int ni, int nj,
-                        DATA_TYPE POLYBENCH_2D(A, NI, NJ, ni, nj))
-{
-  for (int i = 0; i < ni; i++) {
-    for (int j = 0; j < nj; j++)
-        fprintf(stderr, DATA_PRINTF_MODIFIER, A[i][j]);
-    printf("\n");
-    }
-}
-
-/* Main computational kernel. The whole function will be timed,
-   including the call and return. */
-static void kernel_gramschmidt(int ni, int nj,
-                               DATA_TYPE POLYBENCH_2D(A, NI, NJ, ni, nj),
-                               DATA_TYPE POLYBENCH_2D(R, NJ, NJ, nj, nj),
-                               DATA_TYPE POLYBENCH_2D(Q, NI, NJ, ni, nj))
-{
-  int i, j, k;
-
-    DATA_TYPE nrm;
-
-      for (k = 0; k < _PB_NJ; k++)
-  {
-    // Consideriamo la colonna k-esima di A
-    nrm = 0;
-
-    //  Calcoliamo la norma di A^(k)
-    #pragma omp parallel for simd reduction(+:nrm) 
-    for (i = 0; i < _PB_NI; i++)
-      nrm += A[i][k] * A[i][k];
-
-    //  che viene salvata in nel k-esimo elemento diagonale di R
-    R[k][k] = sqrt(nrm);
-
-    // la k-esima colonna di Q è la normalizzazione della k-esima colonna di A
-    // R[k][k] è una very busy expression
-    // qui puoi fare un parallel for su più thread (con anche le SIMD)
-    // Possiamo dividere il lavoro per righe (ovvero dividiamo lo spazio di iterazione di i)
-    //  usiamo più linee di cache (nei vari processori) ma non dovremmo avere problemi di snooping
-    #pragma omp parallel for simd num_threads(NTHREADS) schedule(static)
-    for (i = 0; i < _PB_NI; i++)
-      Q[i][k] = A[i][k] / R[k][k];
-
-    // Per ogni colonna successiva alla k-esima (definita nell'outer loop)
-    // anche questo possiamo parallelizzarlo su più thread, perché ogni colonna è tratta indipendentemente
-    #pragma omp parallel for schedule(static) num_threads(NTHREADS)
-    for (j = k + 1; j < _PB_NJ; j++)
+  for (i = 0; i < ni; i++)
+    for (j = 0; j < nj; j++)
     {
-      R[k][j] = 0;
-
-      // R alla riga k, colonna j è il prodotto della k-esima colonna di Q per la j-esima colonna di A
-      //reduction
-      //    sto lavorando per colonne... non il top per la cache
-      #pragma omp parallel for simd reduction(+ : R[k][j])
-      for (i = 0; i < _PB_NI; i++)
-        R[k][j] += Q[i][k] * A[i][j];
-
-      // aggiorno la colonna i-esima di A con il prodotto element-wise tra colonna k-esima di Q e j-esima di R
-      // reduction
-      #pragma omp parallel for simd schedule(static) num_threads(NTHREADS)
-      for (i = 0; i < _PB_NI; i++)
-        A[i][j] = A[i][j] - Q[i][k] * R[k][j];
+      fprintf(stderr, DATA_PRINTF_MODIFIER, A[i][j]);
+      if (i % 20 == 0)
+        fprintf(stderr, "\n");
     }
-  }
+  fprintf(stderr, "\n");
+  for (i = 0; i < nj; i++)
+    for (j = 0; j < nj; j++)
+    {
+      fprintf(stderr, DATA_PRINTF_MODIFIER, R[i][j]);
+      if (i % 20 == 0)
+        fprintf(stderr, "\n");
+    }
+  fprintf(stderr, "\n");
+  for (i = 0; i < ni; i++)
+    for (j = 0; j < nj; j++)
+    {
+      fprintf(stderr, DATA_PRINTF_MODIFIER, Q[i][j]);
+      if (i % 20 == 0)
+        fprintf(stderr, "\n");
+    }
+  fprintf(stderr, "\n");
 }
 
 
@@ -145,8 +79,8 @@ int main(int argc, char **argv)
   POLYBENCH_2D_ARRAY_DECL(A, DATA_TYPE, NI, NJ, ni, nj);
   POLYBENCH_2D_ARRAY_DECL(R, DATA_TYPE, NJ, NJ, nj, nj);
   POLYBENCH_2D_ARRAY_DECL(Q, DATA_TYPE, NI, NJ, ni, nj);
-
-  /* Declaration for golden standard */
+  POLYBENCH_2D_ARRAY_DECL(A_T, DATA_TYPE, NJ, NI, nj, ni);
+  POLYBENCH_2D_ARRAY_DECL(Q_T, DATA_TYPE, NJ, NI, nj, ni);
 
   /* Initialize array(s). */
   init_array(ni, nj,
@@ -161,7 +95,10 @@ int main(int argc, char **argv)
   kernel_gramschmidt(ni, nj,
                      POLYBENCH_ARRAY(A),
                      POLYBENCH_ARRAY(R),
-                     POLYBENCH_ARRAY(Q));
+                     POLYBENCH_ARRAY(Q),
+                     POLYBENCH_ARRAY(A_T),
+                     POLYBENCH_ARRAY(Q_T));
+
   /* Stop and print timer. */
   polybench_stop_instruments;
   polybench_print_instruments;
@@ -174,6 +111,8 @@ int main(int argc, char **argv)
   POLYBENCH_FREE_ARRAY(A);
   POLYBENCH_FREE_ARRAY(R);
   POLYBENCH_FREE_ARRAY(Q);
+  POLYBENCH_FREE_ARRAY(A_T);
+  POLYBENCH_FREE_ARRAY(Q_T);
 
   return 0;
 }
