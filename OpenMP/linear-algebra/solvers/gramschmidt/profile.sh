@@ -3,8 +3,8 @@
 BENCHMARK_RESULTS_FILE=profile-results.txt
 PERF_FLAGS=task-clock,context-switches,page-faults,cycles,cpu-migrations,branches,branch-misses,instructions,cache-misses,cache-references,L1-dcache-loads,L1-dcache-load-misses,L1-dcache-stores
 
-
-rm $BENCHMARK_RESULTS_FILE
+rm -f $BENCHMARK_RESULTS_FILE
+module load perf
 
 # Copy the specified file in place of gramschmidt.c
 function prepare_src() {
@@ -17,11 +17,7 @@ function compile() {
 }
 
 function run() {
-    for r in $(seq $1); do
-        perf stat -r 5 -e $PERF_FLAGS -o temp_r.txt ./gramschmidt_acc
-        cat temp_r.txt >> $BENCHMARK_RESULTS_FILE
-        rm temp_r.txt
-    done
+        perf stat -r 5 -e $PERF_FLAGS ./gramschmidt_acc | tee -a $BENCHMARK_RESULTS_FILE
 }
 
 echo "Testing base version"
