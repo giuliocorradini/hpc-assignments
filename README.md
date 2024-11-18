@@ -19,3 +19,4 @@ Goal: improve the execution time, on a multi-processor system, of the Gram-Schmi
 
 Source code is located at `OpenMP/linear-algebra/solvers/gramschmidt`.
 
+To profile the application, run either `./test.sh` or `./profile.sh`.
