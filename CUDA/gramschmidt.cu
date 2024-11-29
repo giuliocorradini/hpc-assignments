@@ -120,8 +120,18 @@ static void kernel_gramschmidt(int ni, int nj, Arr2D &A, Arr2D &R, Arr2D &Q) {
 CUDA KERNELS
 
 **********************************************/
-__global__ void compute_norma_and_q(DATA_TYPE *__restrict__ a, DATA_TYPE *__restrict__ b, DATA_TYPE *__restrict__ c, int ni, int nj)
+__global__ void compute_norma_and_q(DATA_TYPE *__restrict__ a, DATA_TYPE *__restrict__ r, DATA_TYPE *__restrict__ q, int ni, int nj)
 {
+    //preparo a shared
+    __shared__ DATA_TYPE a_shared[BLOCK_SIZE][BLOCK_SIZE];
+    __shared__ DARA_TYPE rkk;
+
+    //calcolo id corrispondente al thread
+    int y_block = blockIdx.y;
+    int x_block = blockIdx.x;
+
+    int y_thread = threadIdx.y;
+    int x_thread = threadIdx.x;
 
 }
 int main(int argc, char** argv)
@@ -166,6 +176,8 @@ int main(int argc, char** argv)
     gpuErrchk(cudaMalloc((void **)&d_r, sizeof(DATA_TYPE) * nj * nj));
     gpuErrchk(cudaMalloc((void **)&d_q, sizeof(DATA_TYPE) * ni * nj));
 
+    //READY, STEADY, RUN!!!
+    clock_gettime(CLOCK_REALTIME, rt + 0);
     //Memory movement
     gpuErrchk(cudaMemcpy(d_a, a, sizeof(DATA_TYPE) * ni * nj, cudaMemcpyHostToDevice));
     gpuErrchk(cudaMemcpy(d_r, r, sizeof(DATA_TYPE) * ni * nj, cudaMemcpyHostToDevice));
@@ -180,10 +192,6 @@ int main(int argc, char** argv)
     gpuErrchk(cudaMemcpy(a, d_a, sizeof(DATA_TYPE) * ni * nj, cudaMemcpyDeviceToHost));
     gpuErrchk(cudaMemcpy(r, d_r, sizeof(DATA_TYPE) * nj * nj, cudaMemcpyDeviceToHost));
     gpuErrchk(cudaMemcpy(q, d_q, sizeof(DATA_TYPE) * ni * nj, cudaMemcpyDeviceToHost));
-
-    clock_gettime(CLOCK_REALTIME, rt + 0);
-
-    //DO PARALELIZE
     
     clock_gettime(CLOCK_REALTIME, rt + 1);
     wt = (rt[1].tv_sec - rt[0].tv_sec) + 1.0e-9 * (rt[1].tv_nsec - rt[0].tv_nsec);
