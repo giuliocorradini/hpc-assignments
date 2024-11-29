@@ -1,5 +1,4 @@
-#ifndef GRAMSCHMIDT_H
-# define GRAMSCHMIDT_H
+#pragma once
 
 /* Default to STANDARD_DATASET. */
 # if !defined(MINI_DATASET) && !defined(SMALL_DATASET) && !defined(LARGE_DATASET) && !defined(EXTRALARGE_DATASET)
@@ -35,13 +34,5 @@
 #  endif
 # endif /* !N */
 
-# define _PB_NI POLYBENCH_LOOP_BOUND(NI,ni)
-# define _PB_NJ POLYBENCH_LOOP_BOUND(NJ,nj)
+using DATA_TYPE = double;
 
-# ifndef DATA_TYPE
-#  define DATA_TYPE double
-#  define DATA_PRINTF_MODIFIER "%0.2lf "
-# endif
-
-
-#endif /* !GRAMSCHMIDT */
