@@ -19,6 +19,10 @@ static inline void gpuAssert(cudaError_t code, const char *file, int line, bool 
     }
 }
 
+#ifndef BLOCK_SIZE
+#define BLOCK_SIZE 32
+#endif
+
 using namespace std;
 
 /* Include benchmark-specific header. */
@@ -151,26 +155,31 @@ int main(int argc, char** argv)
     DATA_TYPE *r =R.arr; 
     DATA_TYPE *q =Q.arr; 
 
-    //allocazione memoria A,R,Q
+    //allocazione memoria A,R,Q (R probabilmente non serve, si può rispatmiare spazio)
     cudaMallocHost((void **)&a, sizeof(DATA_TYPE) * ni * nj);
     cudaMallocHost((void **)&r, sizeof(DATA_TYPE) * nj * nj);
     cudaMallocHost((void **)&q, sizeof(DATA_TYPE) * ni * nj);
 
-     //TODO Remove if unecessary
+    //allocazione memoria GPU
     float *d_a, *d_r, *d_q;
     gpuErrchk(cudaMalloc((void **)&d_a, sizeof(DATA_TYPE) * ni * nj));
     gpuErrchk(cudaMalloc((void **)&d_r, sizeof(DATA_TYPE) * nj * nj));
     gpuErrchk(cudaMalloc((void **)&d_q, sizeof(DATA_TYPE) * ni * nj));
 
-    /* gpuErrchk(cudaMemcpy(d_a, a, sizeof(float) * n * n, cudaMemcpyHostToDevice));
-    gpuErrchk(cudaMemcpy(d_b, b, sizeof(float) * n * n, cudaMemcpyHostToDevice));
-    dim3 dimBlock(BLOCK_SIZE, BLOCK_SIZE);
+    //Memory movement
+    gpuErrchk(cudaMemcpy(d_a, a, sizeof(DATA_TYPE) * ni * nj, cudaMemcpyHostToDevice));
+    gpuErrchk(cudaMemcpy(d_r, r, sizeof(DATA_TYPE) * ni * nj, cudaMemcpyHostToDevice));
+    gpuErrchk(cudaMemcpy(d_q, q, sizeof(DATA_TYPE) * ni * nj, cudaMemcpyHostToDevice));
+
+    /* dim3 dimBlock(BLOCK_SIZE, BLOCK_SIZE);
     dim3 dimGrid((n + (BLOCK_SIZE)-1) / (BLOCK_SIZE), (n + (BLOCK_SIZE)-1) / (BLOCK_SIZE));
     gemm<<<dimGrid, dimBlock>>>(d_a, d_b, d_c, n);
-    gpuErrchk(cudaPeekAtLastError());
+    gpuErrchk(cudaPeekAtLastError()); */
 
     //TODO Remove if unecessary
-    gpuErrchk(cudaMemcpy(c, d_c, sizeof(float) * n * n, cudaMemcpyDeviceToHost)); */
+    gpuErrchk(cudaMemcpy(a, d_a, sizeof(DATA_TYPE) * ni * nj, cudaMemcpyDeviceToHost));
+    gpuErrchk(cudaMemcpy(r, d_r, sizeof(DATA_TYPE) * nj * nj, cudaMemcpyDeviceToHost));
+    gpuErrchk(cudaMemcpy(q, d_q, sizeof(DATA_TYPE) * ni * nj, cudaMemcpyDeviceToHost));
 
     clock_gettime(CLOCK_REALTIME, rt + 0);
 
