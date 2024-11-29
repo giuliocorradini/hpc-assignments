@@ -161,7 +161,7 @@ int main(int argc, char** argv)
     cudaMallocHost((void **)&q, sizeof(DATA_TYPE) * ni * nj);
 
     //allocazione memoria GPU
-    float *d_a, *d_r, *d_q;
+    DATA_TYPE *d_a, *d_r, *d_q;
     gpuErrchk(cudaMalloc((void **)&d_a, sizeof(DATA_TYPE) * ni * nj));
     gpuErrchk(cudaMalloc((void **)&d_r, sizeof(DATA_TYPE) * nj * nj));
     gpuErrchk(cudaMalloc((void **)&d_q, sizeof(DATA_TYPE) * ni * nj));
@@ -171,10 +171,10 @@ int main(int argc, char** argv)
     gpuErrchk(cudaMemcpy(d_r, r, sizeof(DATA_TYPE) * ni * nj, cudaMemcpyHostToDevice));
     gpuErrchk(cudaMemcpy(d_q, q, sizeof(DATA_TYPE) * ni * nj, cudaMemcpyHostToDevice));
 
-    /* dim3 dimBlock(BLOCK_SIZE, BLOCK_SIZE);
-    dim3 dimGrid((n + (BLOCK_SIZE)-1) / (BLOCK_SIZE), (n + (BLOCK_SIZE)-1) / (BLOCK_SIZE));
-    gemm<<<dimGrid, dimBlock>>>(d_a, d_b, d_c, n);
-    gpuErrchk(cudaPeekAtLastError()); */
+    dim3 dimBlock(BLOCK_SIZE, BLOCK_SIZE);
+    dim3 dimGrid((ni + (BLOCK_SIZE)-1) / (BLOCK_SIZE), (nj + (BLOCK_SIZE)-1) / (BLOCK_SIZE));
+    compute_norma_and_q<<<dimGrid, dimBlock>>>(d_a, d_r, d_q, ni, nj);
+    gpuErrchk(cudaPeekAtLastError());
 
     //TODO Remove if unecessary
     gpuErrchk(cudaMemcpy(a, d_a, sizeof(DATA_TYPE) * ni * nj, cudaMemcpyDeviceToHost));
