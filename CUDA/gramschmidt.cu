@@ -4,6 +4,21 @@
 #include <unistd.h>
 
 #include <iostream>
+
+#define gpuErrchk(ans)                        \
+    {                                         \
+        gpuAssert((ans), __FILE__, __LINE__); \
+    }
+static inline void gpuAssert(cudaError_t code, const char *file, int line, bool abort = true)
+{
+    if (code != cudaSuccess)
+    {
+        fprintf(stderr, "GPUassert: %s %s %d\n", cudaGetErrorString(code), file, line);
+        if (abort)
+            exit(code);
+    }
+}
+
 using namespace std;
 
 /* Include benchmark-specific header. */
@@ -15,7 +30,6 @@ extern "C"
 {
 #include "utils.h"
 }
-
 
 /* Array initialization. */
 static void init_array(int ni, int nj, Arr2D &A, Arr2D &R, Arr2D &Q) {
@@ -97,6 +111,15 @@ static void kernel_gramschmidt(int ni, int nj, Arr2D &A, Arr2D &R, Arr2D &Q) {
     }
 }
 
+/**********************************************
+
+CUDA KERNELS
+
+**********************************************/
+__global__ void compute_norma_and_q(DATA_TYPE *__restrict__ a, DATA_TYPE *__restrict__ b, DATA_TYPE *__restrict__ c, int ni, int nj)
+{
+
+}
 int main(int argc, char** argv)
 {
     /* Retrieve problem size. */
@@ -124,17 +147,35 @@ int main(int argc, char** argv)
     //Reinizializza matrici
     init_array(ni, nj, A, R, Q);
 
-    DATA_TYPE *d_a =A.arr;
-    DATA_TYPE *d_r =R.arr; 
-    DATA_TYPE *d_q =Q.arr; 
+    DATA_TYPE *a =A.arr;
+    DATA_TYPE *r =R.arr; 
+    DATA_TYPE *q =Q.arr; 
 
     //allocazione memoria A,R,Q
-    cudaMallocHost((void **)&d_a, sizeof(DATA_TYPE) * ni * nj);
-    cudaMallocHost((void **)&d_r, sizeof(DATA_TYPE) * nj * nj);
-    cudaMallocHost((void **)&d_q, sizeof(DATA_TYPE) * ni * nj);
+    cudaMallocHost((void **)&a, sizeof(DATA_TYPE) * ni * nj);
+    cudaMallocHost((void **)&r, sizeof(DATA_TYPE) * nj * nj);
+    cudaMallocHost((void **)&q, sizeof(DATA_TYPE) * ni * nj);
+
+     //TODO Remove if unecessary
+    float *d_a, *d_r, *d_q;
+    gpuErrchk(cudaMalloc((void **)&d_a, sizeof(DATA_TYPE) * ni * nj));
+    gpuErrchk(cudaMalloc((void **)&d_r, sizeof(DATA_TYPE) * nj * nj));
+    gpuErrchk(cudaMalloc((void **)&d_q, sizeof(DATA_TYPE) * ni * nj));
+
+    /* gpuErrchk(cudaMemcpy(d_a, a, sizeof(float) * n * n, cudaMemcpyHostToDevice));
+    gpuErrchk(cudaMemcpy(d_b, b, sizeof(float) * n * n, cudaMemcpyHostToDevice));
+    dim3 dimBlock(BLOCK_SIZE, BLOCK_SIZE);
+    dim3 dimGrid((n + (BLOCK_SIZE)-1) / (BLOCK_SIZE), (n + (BLOCK_SIZE)-1) / (BLOCK_SIZE));
+    gemm<<<dimGrid, dimBlock>>>(d_a, d_b, d_c, n);
+    gpuErrchk(cudaPeekAtLastError());
+
+    //TODO Remove if unecessary
+    gpuErrchk(cudaMemcpy(c, d_c, sizeof(float) * n * n, cudaMemcpyDeviceToHost)); */
 
     clock_gettime(CLOCK_REALTIME, rt + 0);
+
     //DO PARALELIZE
+    
     clock_gettime(CLOCK_REALTIME, rt + 1);
     wt = (rt[1].tv_sec - rt[0].tv_sec) + 1.0e-9 * (rt[1].tv_nsec - rt[0].tv_nsec);
     printf("gramschmidt  (GPU) : %9.3f sec %9.1f GFLOPS\n", wt, 2.0 * ni * nj * nj / (1.0e9 * wt));
@@ -145,10 +186,14 @@ int main(int argc, char** argv)
     print_array(ni, nj, A, R, Q);
     #endif
 
-    //FREE MEMORY
-    cudaFreeHost(d_a);
-    cudaFreeHost(d_r);
-    cudaFreeHost(d_q);
+    //FREE HOST MEMORY
+    cudaFreeHost(a);
+    cudaFreeHost(r);
+    cudaFreeHost(q);
+    //FREE GPU MEMORY
+    cudaFree(a);
+    cudaFree(r);
+    cudaFree(q);
 
     return 0;
 }
