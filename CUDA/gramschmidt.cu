@@ -113,15 +113,42 @@ int main(int argc, char** argv)
     struct timespec rt[2];
     double wt;
 
+
     clock_gettime(CLOCK_REALTIME, rt + 0);
     kernel_gramschmidt(ni, nj, A, R, Q);
     clock_gettime(CLOCK_REALTIME, rt + 1);
     wt = (rt[1].tv_sec - rt[0].tv_sec) + 1.0e-9 * (rt[1].tv_nsec - rt[0].tv_nsec);
     printf("gramschmidt (Host) : %9.3f sec %9.1f GFLOPS\n", wt, 2.0 * ni * nj * nj / (1.0e9 * wt));
     
+    //CUDA VERSION
+    //Reinizializza matrici
+    init_array(ni, nj, A, R, Q);
+
+    DATA_TYPE *d_a =A.arr;
+    DATA_TYPE *d_r =R.arr; 
+    DATA_TYPE *d_q =Q.arr; 
+
+    //allocazione memoria A,R,Q
+    cudaMallocHost((void **)&d_a, sizeof(DATA_TYPE) * ni * nj);
+    cudaMallocHost((void **)&d_r, sizeof(DATA_TYPE) * nj * nj);
+    cudaMallocHost((void **)&d_q, sizeof(DATA_TYPE) * ni * nj);
+
+    clock_gettime(CLOCK_REALTIME, rt + 0);
+    //DO PARALELIZE
+    clock_gettime(CLOCK_REALTIME, rt + 1);
+    wt = (rt[1].tv_sec - rt[0].tv_sec) + 1.0e-9 * (rt[1].tv_nsec - rt[0].tv_nsec);
+    printf("gramschmidt  (GPU) : %9.3f sec %9.1f GFLOPS\n", wt, 2.0 * ni * nj * nj / (1.0e9 * wt));
+
+    
+
     #ifdef PRINT_DEBUG
     print_array(ni, nj, A, R, Q);
     #endif
+
+    //FREE MEMORY
+    cudaFreeHost(d_a);
+    cudaFreeHost(d_r);
+    cudaFreeHost(d_q);
 
     return 0;
 }
