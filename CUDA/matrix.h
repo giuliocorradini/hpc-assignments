@@ -5,11 +5,11 @@
 struct Arr2D
 {
     DATA_TYPE *arr;
-    const int n, m; //size of the tab in 2 dimensions
+    const int x, y; //x is the number of columns, y the number of rows 
 
 public:
-    Arr2D(int n, int m): n(n), m(m) {
-        arr = new DATA_TYPE[n * m];
+    Arr2D(int x, int y): x(x), y(y) {
+        arr = new DATA_TYPE[x * y];
     }
 
     ~Arr2D() {
@@ -17,6 +17,6 @@ public:
     }
 
     DATA_TYPE * operator[] (int i) {
-        return arr + i * m;
+        return arr + i * x;
     }
 };
