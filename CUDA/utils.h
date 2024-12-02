@@ -138,5 +138,11 @@ extern "C"
  * @return void
  */
     void print_stats();
-}    
+}
+
+/**
+ * @brief Floor division with integer arithmetic. Performs floor(a/b)
+ * @return int
+ */
+    int floordiv(int a, int b);
 #endif /*__UTILS_H__*/

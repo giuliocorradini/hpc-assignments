@@ -135,4 +135,8 @@ void print_stats()
     printf("%.4f ms\t%.4f ms\t%.4f ms\t%.4f\n", (double)average, (double)min / 1E6, (double)max / 1E6, (double)std_deviation);
 }
 
+int floordiv(int a, int b) {
+    return (a + b - 1) / b;
+}
+
 }
