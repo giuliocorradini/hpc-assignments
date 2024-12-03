@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
+#include <cuda_runtime.h>
 
 #include <iostream>
 
@@ -22,6 +23,7 @@ static inline void gpuAssert(cudaError_t code, const char *file, int line, bool 
 #ifndef BLOCK_SIZE
 #define BLOCK_SIZE 32
 #endif
+#define NTHREADS 4
 
 using namespace std;
 
@@ -34,6 +36,19 @@ extern "C"
 {
 #include "utils.h"
 }
+
+/**Funzione per trasformare la matrice in trasposta */
+static void transpose_matrix(int ni, int nj, DATA_TYPE* M, DATA_TYPE* M_T)
+{
+    // Transpose the matrix M, to read its columns into cache as rows
+#pragma omp parallel for simd num_threads(NTHREADS) schedule(static) collapse(2)
+    for (int i = 0; i < ni; i++) {
+        for (int j = 0; j < nj; j++) {
+            M_T[j * nj + i] = M[i * ni + j];
+        }
+    }
+}
+
 
 /* Array initialization. */
 static void init_array(int ni, int nj, Arr2D &A, Arr2D &R, Arr2D &Q) {
@@ -117,23 +132,27 @@ static void kernel_gramschmidt(int ni, int nj, Arr2D &A, Arr2D &R, Arr2D &Q) {
 
 /**********************************************
 
-CUDA KERNELS
+CUDA IMPLEMENTATION
 
 **********************************************/
-__global__ void compute_norma_and_q(DATA_TYPE *__restrict__ a, DATA_TYPE *__restrict__ r, DATA_TYPE *__restrict__ q, int ni, int nj)
-{
-    //preparo a shared
-    __shared__ DATA_TYPE a_shared[BLOCK_SIZE][BLOCK_SIZE];
-    __shared__ DARA_TYPE rkk;
+__global__ void compute_a(DATA_TYPE *__restrict__ a, DATA_TYPE *__restrict__ r, DATA_TYPE *__restrict__ q, int ni, int nj, int k) {
+    
+    int ay_offset = BLOCK_SIZE*blockIdx.y*nj + BLOCK_SIZE*threadIdx.y;
+    int ax_offset = BLOCK_SIZE*blockIdx.x + threadIdx.x;
 
-    //calcolo id corrispondente al thread
-    int y_block = blockIdx.y;
-    int x_block = blockIdx.x;
+    int qy_offset = ay_offset;
+    int qx_offset = k;
 
-    int y_thread = threadIdx.y;
-    int x_thread = threadIdx.x;
+    int ry_offset = k*ni;
+    int rx_offset = ax_offset;
+
+    //viengono aggiornati solo i dati relativi all'intervallo [k+1 , nj[
+    if(ax_offset > k && ax_offset < nj)
+        a[ay_offset + ax_offset] -= q[qy_offset + qx_offset] * r[ry_offset+rx_offset];
 
 }
+
+
 int main(int argc, char** argv)
 {
     /* Retrieve problem size. */
@@ -160,10 +179,20 @@ int main(int argc, char** argv)
     //CUDA VERSION
     //Reinizializza matrici
     init_array(ni, nj, A, R, Q);
+    
+    Arr2D A_T(ni, nj);
+    Arr2D Q_T(ni, nj);
 
-    DATA_TYPE *a =A.arr;
+    DATA_TYPE *ab = A.arr;
+    DATA_TYPE *qb = Q.arr;
+
+    DATA_TYPE *a =A_T.arr;
+    DATA_TYPE *q =Q_T.arr; 
+
+    transpose_matrix(ni, nj, a, ab);
+    transpose_matrix(ni, nj, q, qb);
+
     DATA_TYPE *r =R.arr; 
-    DATA_TYPE *q =Q.arr; 
 
     //allocazione memoria A,R,Q (R probabilmente non serve, si può rispatmiare spazio)
     cudaMallocHost((void **)&a, sizeof(DATA_TYPE) * ni * nj);
@@ -178,28 +207,61 @@ int main(int argc, char** argv)
 
     //READY, STEADY, RUN!!!
     clock_gettime(CLOCK_REALTIME, rt + 0);
-    //Memory movement
-    gpuErrchk(cudaMemcpy(d_a, a, sizeof(DATA_TYPE) * ni * nj, cudaMemcpyHostToDevice));
-    gpuErrchk(cudaMemcpy(d_r, r, sizeof(DATA_TYPE) * ni * nj, cudaMemcpyHostToDevice));
-    gpuErrchk(cudaMemcpy(d_q, q, sizeof(DATA_TYPE) * ni * nj, cudaMemcpyHostToDevice));
 
-    dim3 dimBlock(BLOCK_SIZE, BLOCK_SIZE);
-    dim3 dimGrid((ni + (BLOCK_SIZE)-1) / (BLOCK_SIZE), (nj + (BLOCK_SIZE)-1) / (BLOCK_SIZE));
-    compute_norma_and_q<<<dimGrid, dimBlock>>>(d_a, d_r, d_q, ni, nj);
-    gpuErrchk(cudaPeekAtLastError());
+    //compute the factorization
+    int i, j, k;
 
-    //TODO Remove if unecessary
-    gpuErrchk(cudaMemcpy(a, d_a, sizeof(DATA_TYPE) * ni * nj, cudaMemcpyDeviceToHost));
-    gpuErrchk(cudaMemcpy(r, d_r, sizeof(DATA_TYPE) * nj * nj, cudaMemcpyDeviceToHost));
-    gpuErrchk(cudaMemcpy(q, d_q, sizeof(DATA_TYPE) * ni * nj, cudaMemcpyDeviceToHost));
+    DATA_TYPE nrm;
+
+    for (k = 0; k < nj; k++) {
+        // Consideriamo la colonna k-esima di A
+        nrm = 0;
+
+        //  Calcoliamo la norma di A^(k)
+        for (i = 0; i < ni; i++)
+            nrm += A_T[k][i] * A_T[k][i];
+
+        //  che viene salvata in nel k-esimo elemento diagonale di R
+        R[k][k] = sqrt(nrm);
+
+        // la k-esima colonna di Q è la normalizzazione della k-esima colonna di A
+        // R[k][k] è una very busy expression
+        for (i = 0; i < ni; i++)
+            Q_T[k][i] = A_T[k][i] / R[k][k];
+
+        // Per ogni colonna successiva alla k-esima (definita nell'outer loop)
+        for (j = k + 1; j < nj; j++) {
+            R[k][j] = 0;
+
+            // R alla riga k, colonna j è il prodotto della k-esima colonna di Q per la j-esima colonna di A
+            for (i = 0; i < ni; i++)
+                R[k][j] += Q_T[k][i] * A_T[j][i];
+        }
+        //questa operazione è fatta nel kernel, non serve ripeterla j volte
+        //PORTO A NEL DEVICE
+        gpuErrchk(cudaMemcpy(d_a, a, sizeof(DATA_TYPE) * ni * nj, cudaMemcpyHostToDevice));
+        gpuErrchk(cudaMemcpy(d_r, r, sizeof(DATA_TYPE) * ni * nj, cudaMemcpyHostToDevice));
+        gpuErrchk(cudaMemcpy(d_q, q, sizeof(DATA_TYPE) * ni * nj, cudaMemcpyHostToDevice));
+        //ESEGUO IL KERNEL
+        dim3 dimBlock(BLOCK_SIZE, BLOCK_SIZE);
+        dim3 dimGrid((ni + (BLOCK_SIZE)-1) / (BLOCK_SIZE), (nj + (BLOCK_SIZE)-1) / (BLOCK_SIZE));
+        compute_a<<<dimGrid, dimBlock>>>(d_a, d_r, d_q, ni, nj, k);
+        gpuErrchk(cudaPeekAtLastError());
+        //RIPORTO A nell'HOST
+        gpuErrchk(cudaMemcpy(a, d_a, sizeof(DATA_TYPE) * nj * nj, cudaMemcpyDeviceToHost));
+    }
     
     clock_gettime(CLOCK_REALTIME, rt + 1);
     wt = (rt[1].tv_sec - rt[0].tv_sec) + 1.0e-9 * (rt[1].tv_nsec - rt[0].tv_nsec);
     printf("gramschmidt  (GPU) : %9.3f sec %9.1f GFLOPS\n", wt, 2.0 * ni * nj * nj / (1.0e9 * wt));
 
+   
     
-
     #ifdef PRINT_DEBUG
+    //ritraspongo le matrici in caso si voglia stamparle
+    transpose_matrix(ni, nj, A_T, A);
+    transpose_matrix(ni, nj, Q_T, Q);
+    
     print_array(ni, nj, A, R, Q);
     #endif
 
@@ -208,9 +270,9 @@ int main(int argc, char** argv)
     cudaFreeHost(r);
     cudaFreeHost(q);
     //FREE GPU MEMORY
-    cudaFree(a);
-    cudaFree(r);
-    cudaFree(q);
+    cudaFree(d_a);
+    cudaFree(d_r);
+    cudaFree(d_q);
 
     return 0;
 }
