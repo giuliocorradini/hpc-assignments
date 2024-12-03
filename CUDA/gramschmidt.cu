@@ -105,7 +105,7 @@ static void kernel_gramschmidt(int ni, int nj, Arr2D &A, Arr2D &R, Arr2D &Q) {
 
         //  Calcoliamo la norma di A^(k)
         for (i = 0; i < ni; i++)
-            nrm += A[i][k] * A[i][k];
+            nrm += A[k][i] * A[k][i];
 
         //  che viene salvata in nel k-esimo elemento diagonale di R
         R[k][k] = sqrt(nrm);
@@ -113,7 +113,7 @@ static void kernel_gramschmidt(int ni, int nj, Arr2D &A, Arr2D &R, Arr2D &Q) {
         // la k-esima colonna di Q è la normalizzazione della k-esima colonna di A
         // R[k][k] è una very busy expression
         for (i = 0; i < ni; i++)
-            Q[i][k] = A[i][k] / R[k][k];
+            Q[k][i] = A[k][i] / R[k][k];
 
         // Per ogni colonna successiva alla k-esima (definita nell'outer loop)
         for (j = k + 1; j < nj; j++) {
@@ -121,11 +121,11 @@ static void kernel_gramschmidt(int ni, int nj, Arr2D &A, Arr2D &R, Arr2D &Q) {
 
             // R alla riga k, colonna j è il prodotto della k-esima colonna di Q per la j-esima colonna di A
             for (i = 0; i < ni; i++)
-                R[k][j] += Q[i][k] * A[i][j];
+                R[k][j] += Q[k][i] * A[j][i];
 
             // aggiorno la colonna i-esima di A con il prodotto element-wise tra colonna k-esima di Q e j-esima di R
             for (i = 0; i < ni; i++)
-                A[i][j] = A[i][j] - Q[i][k] * R[k][j];
+                A[j][i] = A[j][i] - Q[k][i] * R[k][j];
         }
     }
 }
@@ -162,6 +162,8 @@ int main(int argc, char** argv)
     Arr2D A(ni, nj);
     Arr2D R(nj, nj);
     Arr2D Q(ni, nj);
+    Arr2D A_T(ni, nj);
+    Arr2D Q_T(ni, nj);
 
     /* Initialize array(s). */
     init_array(ni, nj, A, R, Q);
@@ -170,8 +172,20 @@ int main(int argc, char** argv)
     double wt;
 
 
+    DATA_TYPE *ab = A.arr;
+    DATA_TYPE *qb = Q.arr;
+
+    DATA_TYPE *a =A_T.arr;
+    DATA_TYPE *q =Q_T.arr; 
+
+    //transpongo qu per ottimizzare i tempo in memoria
+    transpose_matrix(ni, nj, a, ab);
+    transpose_matrix(ni, nj, q, qb);
+
     clock_gettime(CLOCK_REALTIME, rt + 0);
-    kernel_gramschmidt(ni, nj, A, R, Q);
+
+    kernel_gramschmidt(ni, nj, A_T, R, Q_T);
+
     clock_gettime(CLOCK_REALTIME, rt + 1);
     wt = (rt[1].tv_sec - rt[0].tv_sec) + 1.0e-9 * (rt[1].tv_nsec - rt[0].tv_nsec);
     printf("gramschmidt (Host) : %9.3f sec %9.1f GFLOPS\n", wt, 2.0 * ni * nj * nj / (1.0e9 * wt));
@@ -179,15 +193,6 @@ int main(int argc, char** argv)
     //CUDA VERSION
     //Reinizializza matrici
     init_array(ni, nj, A, R, Q);
-    
-    Arr2D A_T(ni, nj);
-    Arr2D Q_T(ni, nj);
-
-    DATA_TYPE *ab = A.arr;
-    DATA_TYPE *qb = Q.arr;
-
-    DATA_TYPE *a =A_T.arr;
-    DATA_TYPE *q =Q_T.arr; 
 
     transpose_matrix(ni, nj, a, ab);
     transpose_matrix(ni, nj, q, qb);
