@@ -34,5 +34,5 @@
 #  endif
 # endif /* !N */
 
-using DATA_TYPE = double;
+using DATA_TYPE = float;
 
