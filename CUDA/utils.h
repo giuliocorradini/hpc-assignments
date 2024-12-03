@@ -144,5 +144,7 @@ extern "C"
  * @brief Floor division with integer arithmetic. Performs floor(a/b)
  * @return int
  */
-    int floordiv(int a, int b);
+constexpr int floordiv(int a, int b) {
+    return (a + b - 1) / b;
+}
 #endif /*__UTILS_H__*/

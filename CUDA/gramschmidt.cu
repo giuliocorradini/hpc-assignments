@@ -102,35 +102,49 @@ static void kernel_gramschmidt(int ni, int nj, Arr2D &A, Arr2D &R, Arr2D &Q) {
 }
 
 /**
- *  Computes the normalization of the k-st column of A, and saves it into the k-st column of Q.
+ *  Computes the normalization of the k-st column of A using a reduction in shared memory.
+ *  The kernel is launched once, with a single block of dimension BLOCK_DIM.
  *
  *  Returns the norm of A^(k) in R[k][k]
  */
-__device__ void normalize_column(Arr2D &A, Arr2D &Q, Arr2D &R, int k) {
-    DATA_TYPE pnorm = 0;    //private norm accumulator
-    __shared__ DATA_TYPE norm;
+__global__ void column_norm(Arr2D &A, int k, DATA_TYPE *nrm) {
+    __shared__ DATA_TYPE norm[BLOCK_DIM];
 
-    for (int ly=threadIdx.y; ly<blockIdx.y; ly++) {
-        if (ly + blockIdx.y * blockDim.y < A.y)
-            pnorm += A[ly + blockIdx.y * blockDim.y][column] * A[ly + blockIdx.y * blockDim.y][column];
-    }
-    __synchthreads();
+    //IMPROVEMENT: bring A^(k) in shmem
 
-    atomicAdd(norm, pnorm);
+    int SUBCOL_DIM = floordiv(A.y, blockDim.x);
 
-    //  Q^(k) <- normalized A^(k)
-    for (int ly=threadIdx.y; ly<blockIdx.y; ly++) {
-        if (ly + blockIdx.y * blockDim.y < A.y)
-            Q[ly + blockIdx.y * blockDim.y][column] = A[ly + blockIdx.y * blockDim.y][column] / norm;
+    for (int ly=threadIdx.x; ly < threadIdx.x + SUBCOL_DIM; ly++) {
+        if (ly < A.y)
+            norm[threadIdx.x] += A[ly][k] * A[ly][k];
+        else
+            norm[threadIdx.x] = 0;
     }
     __syncthreads();
+
+    for (int b=blockDim.x / 2; b>0; b >>= 1) {  //  funnel pattern of reduction
+        if (threadIdx.x < b)
+            norm[threadIdx.x] += norm[threadIdx.x + b];
+        __syncthreads();
+    }
+
+    *nrm = norm[0];
+}
+
+__global__ void copy_to_q(Arr2D &A, Arr2D &Q, int k, DATA_TYPE *norm) {
+    //  Q^(k) <- normalized A^(k)
+    int SUBCOL = blockIdx.x * blockDim.x;
+    int tid = threadIdx.x + SUBCOL;
+
+    if (tid < A.y)
+       Q[tid][k] = A[tid][k] / *norm;
 }
 
 /**
  *  Update R (lower triangular matrix) by updating the block [0, k-1] x [k, y]
  */
 __device__ void update_with_basis(Arr2D &A, Arr2D &Q, Arr2D &R, int k) {
-    R[k][threadIdx.x] = 0;    //TODO: recompute taking offset into account
+    /*R[k][threadIdx.x] = 0;    //TODO: recompute taking offset into account
     
     //Mi porto in shared memory la k-esima colonna di Q, che mi serve (volendo la posso tenere anche dal prcedente passo)
     __shared__ DATA_TYPE qk[blockDim.x];
@@ -141,31 +155,28 @@ __device__ void update_with_basis(Arr2D &A, Arr2D &Q, Arr2D &R, int k) {
     for (int ly = threadIdx.y; ly < blockDim.y; ly++) {
         r_kj_partial[threadIdx.x] += Q[ly][threadIdx.x] * A[ly][threadIdx.x];
     }
-    atomicAdd(&R[k][threadIdx.x], r_kj_partial[threadIdx.x]);
+    atomicAdd(&R[k][threadIdx.x], r_kj_partial[threadIdx.x]);*/
 }
 
 __device__ void update_a(Arr2D &A, Arr2D &Q, Arr2D &R, int k) {
-    for (int ly=threadIdx.y; ly<blockIdx.y; ly++) {
+/*    for (int ly=threadIdx.y; ly<blockIdx.y; ly++) {
         if (ly + blockIdx.y * blockDim.y < A.y)
-            A[ly + blockIdx.y * blockDim.y][column] -= Q[ly + blockIdx.y * blockDim.y][k] * R[k][threadIdx.x + blockIdx.x * blockDim.x];
+            A[ly + blockIdx.y * blockDim.y][column] -= Q[ly + blockIdx.y * blockDim.y][k] * R[k][threadIdx.x + blockIdx.x * blockDim.x];*/
 }
 
 /**
  *  Host function for gramschmidt computation. Kernels are launched from host with VRAM resident data
  */
 void cu_gramschmidt(Arr2D &A, Arr2D &R, Arr2D &Q) {
-    for (k=0; k<A.x; k++) {
-        dim3 column_block(BLOCK_DIM);
-        dim3 column_grid((A.y + BLOCK_DIM - 1) / BLOCK_DIM);
-        normalize_column<<< column_block, column_grid >>>(A, Q, R, k, norm);
-        //R[k][k] = norm; //è solo un valore, ha senso portarlo in VRAM? Se sono su dGPU forse sì
-
-        update_with_basis<<<, >>>(A, Q, R, k);
+    /*for (k=0; k<A.x; k++) {
+        normalize_column<<<BLOCK_DIM, 1>>>(A, Q, k, norm);
 
         dim3 edge_blocking(BLOCK_DIM, BLOCK_DIM);
-        dim3 column_edge_grid(
-        update_a<<<, >>>(A, Q, R, k);
-    }
+        dim3 column_edge_grid(floordiv(A.x-k, BLOCK_DIM), floordiv(A.y, BLOCK_DIM));
+        update_with_basis<<<edge_blocking, column_edge_grid>>>(A, Q, R, k);
+
+        update_a<<<edge_blocking, column_edge_blocking>>>(A, Q, R, k);
+    }*/
 }
 
 int main(int argc, char** argv)
@@ -174,9 +185,9 @@ int main(int argc, char** argv)
     int ni = NI;
     int nj = NJ;
 
-    Arr2D A(ni, nj);
-    Arr2D R(nj, nj);
-    Arr2D Q(ni, nj);
+    HostArr2D A(ni, nj);
+    HostArr2D R(nj, nj);
+    HostArr2D Q(ni, nj);
 
     /* Initialize array(s). */
     init_array(ni, nj, A, R, Q);
@@ -184,17 +195,40 @@ int main(int argc, char** argv)
     struct timespec rt[2];
     double wt;
 
-    clock_gettime(CLOCK_REALTIME, rt + 0);
+/*    clock_gettime(CLOCK_REALTIME, rt + 0);
     kernel_gramschmidt(ni, nj, A, R, Q);
     clock_gettime(CLOCK_REALTIME, rt + 1);
     wt = (rt[1].tv_sec - rt[0].tv_sec) + 1.0e-9 * (rt[1].tv_nsec - rt[0].tv_nsec);
-    printf("gramschmidt (Host) : %9.3f sec %9.1f GFLOPS\n", wt, 2.0 * ni * nj * nj / (1.0e9 * wt));
+    printf("gramschmidt (Host) : %9.3f sec %9.1f GFLOPS\n", wt, 2.0 * ni * nj * nj / (1.0e9 * wt));*/
+
+    DeviceArr2D dA(ni, nj);
+    DeviceArr2D dR(nj, nj);
+    DeviceArr2D dQ(ni, nj);
+
+    dA = A;
+
+    DATA_TYPE *nrm;
+    cudaMalloc(&nrm, sizeof(DATA_TYPE));
+    column_norm<<<32, 1>>>(dA, 1, nrm);
+    copy_to_q<<<BLOCK_DIM, floordiv(dA.y, BLOCK_DIM)>>>(dA, dQ, 1, nrm);
+    
+    A = dA;
+    Q = dQ;
+    for (int y=0; y<A.y; y++) {
+        cout << A[y][1] << "\t" << Q[y][1] << endl;
+    }
+    cout << endl;
     
     #ifdef PRINT_DEBUG
     print_array(ni, nj, A, R, Q);
     #endif
 
-    //TODO: memcpy
+    cout << dA.arr << " " << dQ.arr << " " << dR.arr << endl;
+
+    dA.free();
+    dR.free();
+    dQ.free();
+    cudaDeviceReset();
 
     return 0;
 }
