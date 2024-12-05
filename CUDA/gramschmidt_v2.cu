@@ -173,15 +173,36 @@ __global__ void norma_a_and_init_col_k_q(DATA_TYPE *__restrict__ a, DATA_TYPE *_
 }
 
 __global__ void dot_product_a_q(DATA_TYPE *__restrict__ a, DATA_TYPE *__restrict__ r, DATA_TYPE *__restrict__ q, int ni, int nj, int k) {
-
-
-    //dovrebbe essere necessario controllare solo ca coordinata y, ma meglio essere paranoici
+    
+    cg::thread_block cta = cg::this_thread_block();
 
     int a_row = blockDim.y*blockIdx.y + threadIdx.y;
     int a_col = blockDim.x*blockIdx.x + threadIdx.x;
-    
-    if(a_row < ni){
 
+    //un thread per colonna deve inizializzare r[k][j], sarebbe pi facile se si inizializzasse tutta r a 0
+    if(a_col > k && blockIdx.y==0 && blockIdx.x==0 && threadIdx.y==0){
+        r[k*ni + a_col] = 0;
+    }
+    cg::sync(cta);  
+    if(a_row < ni && a_col > k){
+
+        DATA_TYPE a_ij = a[a_row*ni + a_col];
+        DATA_TYPE q_ik = q[a_row*ni + k];
+        atomicAdd(&r[k*ni+k], a_ij*q_ik);
+    }
+
+}
+
+__global__ void update_a(DATA_TYPE *__restrict__ a, DATA_TYPE *__restrict__ r, DATA_TYPE *__restrict__ q, int ni, int nj, int k) {
+    
+    int a_row = blockDim.y*blockIdx.y + threadIdx.y;
+    int a_col = blockDim.x*blockIdx.x + threadIdx.x;
+
+    if(a_row < ni && a_col > k){
+        //è per chiarezza, il compilatore poi propaga il valore
+        DATA_TYPE result = a[a_row*ni + a_col] - q[a_row*ni + k] * r[k*ni+a_col];
+        //aggiorno il valore, non c'è concorrenza stavolta
+        a[a_row*ni + a_col] = result;
     }
 
 }
@@ -256,16 +277,19 @@ int main(int argc, char** argv)
         num_blocks = (ni + BLOCK_SIZE - 1) / BLOCK_SIZE;
         norma_a_and_init_col_k_q<<<num_blocks, BLOCK_SIZE>>>(d_a, d_r, d_q, ni, nj, k);
         gpuErrchk(cudaPeekAtLastError());
+
         //DOPO che tutti i tread hanno scritto su A setto la radice
-        dimBlock(BLOCK_SIZE,BLOCK_SIZE);
-        dimGrid((nj + BLOCK_SIZE - 1)/BLOCK_SIZE, ((ni + BLOCK_SIZE - 1)/BLOCK_SIZE));
+        dim3 dimBlock(BLOCK_SIZE,BLOCK_SIZE);
+        dim3 dimGrid((nj + BLOCK_SIZE - 1)/BLOCK_SIZE, ((ni + BLOCK_SIZE - 1)/BLOCK_SIZE));
         norma_a_and_init_col_k_q<<<num_blocks, BLOCK_SIZE>>>(d_a, d_r, d_q, ni, nj, k);
+        gpuErrchk(cudaPeekAtLastError());
+
+        //AVENDO IN R IL PRODOTTO SCALARE POSSO AGGIORNARE A, stavolta con un kernel parallelo
+        //le dimensioni sono le stesse dell'operazione precedente
+        update_a<<<num_blocks, BLOCK_SIZE>>>(d_a, d_r, d_q, ni, nj, k);
         gpuErrchk(cudaPeekAtLastError());
     
     }
-        /* compute_a<<<dimGrid, dimBlock>>>(d_a, d_r, d_q, ni, nj, k);
-        gpuErrchk(cudaPeekAtLastError()); */
-        //RIPORTO A nell'HOST
 
     //MEMORY BACK TO HOST
     gpuErrchk(cudaMemcpy(a, d_a, sizeof(DATA_TYPE) * nj * nj, cudaMemcpyDeviceToHost));
