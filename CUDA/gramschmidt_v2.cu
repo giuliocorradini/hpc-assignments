@@ -61,7 +61,7 @@ static void init_array(int ni, int nj, Arr2D &A, Arr2D &R, Arr2D &Q) {
         }
     for (i = 0; i < nj; i++)
         for (j = 0; j < nj; j++)
-            R[i][j] = ((DATA_TYPE)i * (j + 2)) / nj;
+            R[i][j] = 0.0f;//((DATA_TYPE)i * (j + 2)) / nj;
 }
 
 /* DCE code. Must scan the entire live-out data.
@@ -139,7 +139,7 @@ CUDA IMPLEMENTATION
 
 namespace cg = cooperative_groups;
 
-__global__ void norma_a_and_init_col_k_q(DATA_TYPE *__restrict__ a, DATA_TYPE *__restrict__ r, DATA_TYPE *__restrict__ q, int ni, int nj, int k) {
+__global__ void norma_a(DATA_TYPE *__restrict__ a, DATA_TYPE *__restrict__ r, DATA_TYPE *__restrict__ q, int ni, int nj, int k) {
 
     cg::thread_block cta = cg::this_thread_block();
 
@@ -149,7 +149,6 @@ __global__ void norma_a_and_init_col_k_q(DATA_TYPE *__restrict__ a, DATA_TYPE *_
         value *= value;
         atomicAdd(&r[k*ni+k], value);
 
-
         //sync della grid
         cg::sync(cta);
         //un thread, quando tutti gli altri hanno finito di scrivere, calcola la norma
@@ -157,31 +156,30 @@ __global__ void norma_a_and_init_col_k_q(DATA_TYPE *__restrict__ a, DATA_TYPE *_
             r[k*ni+k] = sqrt(r[k*ni+k]);
         }
 
-        //calcolo colonna normalizzata di q
-        //non c'è bisogno di rilegere
-        value = value / value;
-        q[a_row*nj + k] = value / r[k*ni+k];
     }
 
 }
 
-__global__ void dot_product_a_q(DATA_TYPE *__restrict__ a, DATA_TYPE *__restrict__ r, DATA_TYPE *__restrict__ q, int ni, int nj, int k) {
-    
-    cg::thread_block cta = cg::this_thread_block();
+__global__ void init_col_k_q(DATA_TYPE *__restrict__ a, DATA_TYPE *__restrict__ r, DATA_TYPE *__restrict__ q, int ni, int nj, int k) {
 
+    int a_row = blockDim.y*blockIdx.y + threadIdx.y;
+    if(a_row < ni){
+        q[a_row*nj + k] = a[a_row*nj + k] / r[k*ni+k];
+    }
+}
+__global__ void dot_product_a_q(DATA_TYPE *__restrict__ a, DATA_TYPE *__restrict__ r, DATA_TYPE *__restrict__ q, int ni, int nj, int k) {
+
+    //r è inizializzzata a matrice nulla
+    DATA_TYPE partial_sum = 0;
     int a_row = blockDim.y*blockIdx.y + threadIdx.y;
     int a_col = blockDim.x*blockIdx.x + threadIdx.x;
 
-    //un thread per colonna deve inizializzare r[k][j], sarebbe pi facile se si inizializzasse tutta r a 0
-    if(a_col > k && blockIdx.y==0 && blockIdx.x==0 && threadIdx.y==0){
-        r[k*ni + a_col] = 0;
-    }
-    cg::sync(cta);  
     if(a_row < ni && a_col > k){
+        for(int j = k; j<nj; j++){
+            partial_sum += a[a_row*nj + a_col] * q[a_row*ni + k];
+        }
 
-        DATA_TYPE a_ij = a[a_row*ni + a_col];
-        DATA_TYPE q_ik = q[a_row*ni + k];
-        atomicAdd(&r[k*ni+k], a_ij*q_ik);
+        r[k*ni+a_col] = partial_sum;  
     }
 
 }
@@ -268,17 +266,21 @@ int main(int argc, char** argv)
     for (int k = 0; k < nj; k++) {
         //KERNEL PER CALCOLO DI NORM A - DIM BLOCK limitata a 32*1
         num_blocks = (ni + BLOCK_SIZE - 1) / BLOCK_SIZE;
-        norma_a_and_init_col_k_q<<<num_blocks, BLOCK_SIZE>>>(d_a, d_r, d_q, ni, nj, k);
+        norma_a<<<num_blocks, BLOCK_SIZE>>>(d_a, d_r, d_q, ni, nj, k);
         gpuErrchk(cudaPeekAtLastError());
-
+        
+        //INIZIALIZZO COLONNA k DI Q - La grid ha la stessa dimensione
+        init_col_k_q<<<num_blocks, BLOCK_SIZE>>>(d_a, d_r, d_q, ni, nj, k);
+        gpuErrchk(cudaPeekAtLastError());
+        
         //DOPO che tutti i tread hanno scritto su A setto la radice
-        dim3 dimBlock(BLOCK_SIZE,BLOCK_SIZE);
-        dim3 dimGrid((nj + BLOCK_SIZE - 1)/BLOCK_SIZE, ((ni + BLOCK_SIZE - 1)/BLOCK_SIZE));
-        norma_a_and_init_col_k_q<<<dimGrid, dimBlock>>>(d_a, d_r, d_q, ni, nj, k);
+        dot_product_a_q<<<num_blocks, BLOCK_SIZE>>>(d_a, d_r, d_q, ni, nj, k);
         gpuErrchk(cudaPeekAtLastError());
 
         //AVENDO IN R IL PRODOTTO SCALARE POSSO AGGIORNARE A, stavolta con un kernel parallelo
         //le dimensioni sono le stesse dell'operazione precedente
+        dim3 dimBlock(BLOCK_SIZE,BLOCK_SIZE);
+        dim3 dimGrid((nj + BLOCK_SIZE - 1)/BLOCK_SIZE, ((ni + BLOCK_SIZE - 1)/BLOCK_SIZE));
         update_a<<<dimGrid, dimBlock>>>(d_a, d_r, d_q, ni, nj, k);
         gpuErrchk(cudaPeekAtLastError());
     
