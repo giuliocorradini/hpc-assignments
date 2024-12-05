@@ -105,7 +105,7 @@ static void kernel_gramschmidt(int ni, int nj, Arr2D &A, Arr2D &R, Arr2D &Q) {
 
         //  Calcoliamo la norma di A^(k)
         for (i = 0; i < ni; i++)
-            nrm += A[k][i] * A[k][i];
+            nrm += A[i][k] * A[i][k];
 
         //  che viene salvata in nel k-esimo elemento diagonale di R
         R[k][k] = sqrt(nrm);
@@ -113,7 +113,7 @@ static void kernel_gramschmidt(int ni, int nj, Arr2D &A, Arr2D &R, Arr2D &Q) {
         // la k-esima colonna di Q è la normalizzazione della k-esima colonna di A
         // R[k][k] è una very busy expression
         for (i = 0; i < ni; i++)
-            Q[k][i] = A[k][i] / R[k][k];
+            Q[i][k] = A[i][k] / R[k][k];
 
         // Per ogni colonna successiva alla k-esima (definita nell'outer loop)
         for (j = k + 1; j < nj; j++) {
@@ -121,11 +121,11 @@ static void kernel_gramschmidt(int ni, int nj, Arr2D &A, Arr2D &R, Arr2D &Q) {
 
             // R alla riga k, colonna j è il prodotto della k-esima colonna di Q per la j-esima colonna di A
             for (i = 0; i < ni; i++)
-                R[k][j] += Q[k][i] * A[j][i];
+                R[k][j] += Q[i][k] * A[i][j];
 
             // aggiorno la colonna i-esima di A con il prodotto element-wise tra colonna k-esima di Q e j-esima di R
             for (i = 0; i < ni; i++)
-                A[j][i] = A[j][i] - Q[k][i] * R[k][j];
+                A[i][j] = A[i][j] - Q[i][k] * R[k][j];
         }
     }
 }
@@ -207,8 +207,6 @@ int main(int argc, char** argv)
     Arr2D A(ni, nj);
     Arr2D R(nj, nj);
     Arr2D Q(ni, nj);
-    Arr2D A_T(ni, nj);
-    Arr2D Q_T(ni, nj);
 
     /* Initialize array(s). */
     init_array(ni, nj, A, R, Q);
@@ -216,20 +214,14 @@ int main(int argc, char** argv)
     struct timespec rt[2];
     double wt;
 
-
-    DATA_TYPE *ab = A.arr;
-    DATA_TYPE *qb = Q.arr;
-
-    DATA_TYPE *a =A_T.arr;
-    DATA_TYPE *q =Q_T.arr; 
+    DATA_TYPE *a =A.arr;
+    DATA_TYPE *q =Q.arr; 
+    DATA_TYPE *r =R.arr; 
 
     //transpongo qu per ottimizzare i tempo in memoria
-    transpose_matrix(ni, nj, a, ab);
-    transpose_matrix(ni, nj, q, qb);
-
     clock_gettime(CLOCK_REALTIME, rt + 0);
 
-    kernel_gramschmidt(ni, nj, A_T, R, Q_T);
+    kernel_gramschmidt(ni, nj, A, R, Q);
 
     clock_gettime(CLOCK_REALTIME, rt + 1);
     wt = (rt[1].tv_sec - rt[0].tv_sec) + 1.0e-9 * (rt[1].tv_nsec - rt[0].tv_nsec);
@@ -238,10 +230,6 @@ int main(int argc, char** argv)
     //CUDA VERSION
     //Reinizializza matrici
     init_array(ni, nj, A, R, Q);
-
-    DATA_TYPE *r =R.arr; 
-    a = A.arr;
-    q = Q.arr;
 
     //allocazione memoria A,R,Q (R probabilmente non serve, si può rispatmiare spazio)
     cudaMallocHost((void **)&a, sizeof(DATA_TYPE) * ni * nj);
@@ -265,6 +253,7 @@ int main(int argc, char** argv)
     int num_blocks;
     for (int k = 0; k < nj; k++) {
         //KERNEL PER CALCOLO DI NORM A - DIM BLOCK limitata a 32*1
+        //uso un thread per riga
         num_blocks = (ni + BLOCK_SIZE - 1) / BLOCK_SIZE;
         norma_a<<<num_blocks, BLOCK_SIZE>>>(d_a, d_r, d_q, ni, nj, k);
         gpuErrchk(cudaPeekAtLastError());
@@ -274,6 +263,8 @@ int main(int argc, char** argv)
         gpuErrchk(cudaPeekAtLastError());
         
         //DOPO che tutti i tread hanno scritto su A setto la radice
+        //serve un thread per colonna
+        num_blocks = (nj + BLOCK_SIZE - 1) / BLOCK_SIZE;
         dot_product_a_q<<<num_blocks, BLOCK_SIZE>>>(d_a, d_r, d_q, ni, nj, k);
         gpuErrchk(cudaPeekAtLastError());
 
@@ -300,9 +291,6 @@ int main(int argc, char** argv)
     
     #ifdef PRINT_DEBUG
     //ritraspongo le matrici in caso si voglia stamparle
-    transpose_matrix(ni, nj, A_T, A);
-    transpose_matrix(ni, nj, Q_T, Q);
-    
     print_array(ni, nj, A, R, Q);
     #endif
 
