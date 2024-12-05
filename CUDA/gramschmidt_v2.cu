@@ -140,15 +140,8 @@ CUDA IMPLEMENTATION
 namespace cg = cooperative_groups;
 
 __global__ void norma_a_and_init_col_k_q(DATA_TYPE *__restrict__ a, DATA_TYPE *__restrict__ r, DATA_TYPE *__restrict__ q, int ni, int nj, int k) {
-    
-    __shared__ DATA_TYPE partial_norm;
 
     cg::thread_block cta = cg::this_thread_block();
-
-    //dovrebbe essere necessario controllare solo ca coordinata y, ma meglio essere paranoici
-    if(blockIdx.y==0 && blockIdx.x==0 && threadIdx.y==0 && threadIdx.x==0){
-        partial_norm = 0;
-    }
 
     int a_row = blockDim.y*blockIdx.y + threadIdx.y;
     if(a_row < ni){
@@ -281,12 +274,12 @@ int main(int argc, char** argv)
         //DOPO che tutti i tread hanno scritto su A setto la radice
         dim3 dimBlock(BLOCK_SIZE,BLOCK_SIZE);
         dim3 dimGrid((nj + BLOCK_SIZE - 1)/BLOCK_SIZE, ((ni + BLOCK_SIZE - 1)/BLOCK_SIZE));
-        norma_a_and_init_col_k_q<<<num_blocks, BLOCK_SIZE>>>(d_a, d_r, d_q, ni, nj, k);
+        norma_a_and_init_col_k_q<<<dimGrid, dimBlock>>>(d_a, d_r, d_q, ni, nj, k);
         gpuErrchk(cudaPeekAtLastError());
 
         //AVENDO IN R IL PRODOTTO SCALARE POSSO AGGIORNARE A, stavolta con un kernel parallelo
         //le dimensioni sono le stesse dell'operazione precedente
-        update_a<<<num_blocks, BLOCK_SIZE>>>(d_a, d_r, d_q, ni, nj, k);
+        update_a<<<dimGrid, dimBlock>>>(d_a, d_r, d_q, ni, nj, k);
         gpuErrchk(cudaPeekAtLastError());
     
     }
