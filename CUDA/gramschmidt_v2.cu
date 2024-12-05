@@ -135,11 +135,18 @@ static void kernel_gramschmidt(int ni, int nj, Arr2D &A, Arr2D &R, Arr2D &Q) {
 CUDA IMPLEMENTATION
 
 **********************************************/
-__global__ void calcolo_norma_a(DATA_TYPE *__restrict__ a, DATA_TYPE *__restrict__ r, int ni, int nj, int k) {
+#include <cooperative_groups.h>
+
+namespace cg = cooperative_groups;
+
+__global__ void norma_a_and_init_col_k_q(DATA_TYPE *__restrict__ a, DATA_TYPE *__restrict__ r, DATA_TYPE *__restrict__ q, int ni, int nj, int k) {
     
     __shared__ DATA_TYPE partial_norm;
 
-    if(blockIdx.y==0 && threadIdx.y==0){
+    cg::thread_block cta = cg::this_thread_block();
+
+    //dovrebbe essere necessario controllare solo ca coordinata y, ma meglio essere paranoici
+    if(blockIdx.y==0 && blockIdx.x==0 && threadIdx.y==0 && threadIdx.x==0){
         partial_norm = 0;
     }
 
@@ -148,9 +155,36 @@ __global__ void calcolo_norma_a(DATA_TYPE *__restrict__ a, DATA_TYPE *__restrict
         DATA_TYPE value = a[a_row*nj + k];
         value *= value;
         atomicAdd(&r[k*ni+k], value);
+
+
+        //sync della grid
+        cg::sync(cta);
+        //un thread, quando tutti gli altri hanno finito di scrivere, calcola la norma
+        if(blockIdx.y==0 && blockIdx.x==0 && threadIdx.y==0 && threadIdx.x==0){
+            r[k*ni+k] = sqrt(r[k*ni+k]);
+        }
+
+        //calcolo colonna normalizzata di q
+        //non c'è bisogno di rilegere
+        value = value / value;
+        q[a_row*nj + k] = value / r[k*ni+k];
     }
+
 }
 
+__global__ void dot_product_a_q(DATA_TYPE *__restrict__ a, DATA_TYPE *__restrict__ r, DATA_TYPE *__restrict__ q, int ni, int nj, int k) {
+
+
+    //dovrebbe essere necessario controllare solo ca coordinata y, ma meglio essere paranoici
+
+    int a_row = blockDim.y*blockIdx.y + threadIdx.y;
+    int a_col = blockDim.x*blockIdx.x + threadIdx.x;
+    
+    if(a_row < ni){
+
+    }
+
+}
 
 int main(int argc, char** argv)
 {
@@ -220,12 +254,13 @@ int main(int argc, char** argv)
     for (int k = 0; k < nj; k++) {
         //KERNEL PER CALCOLO DI NORM A - DIM BLOCK limitata a 32*1
         num_blocks = (ni + BLOCK_SIZE - 1) / BLOCK_SIZE;
-        calcolo_norma_a<<<num_blocks, BLOCK_SIZE>>>(d_a, d_r, ni, nj, k);
+        norma_a_and_init_col_k_q<<<num_blocks, BLOCK_SIZE>>>(d_a, d_r, d_q, ni, nj, k);
         gpuErrchk(cudaPeekAtLastError());
         //DOPO che tutti i tread hanno scritto su A setto la radice
-        //cudaMemset(r[k*ni + k], sqrt(r[k*ni + k]), sizeof(DATA_TYPE));
-
-    
+        dimBlock(BLOCK_SIZE,BLOCK_SIZE);
+        dimGrid((nj + BLOCK_SIZE - 1)/BLOCK_SIZE, ((ni + BLOCK_SIZE - 1)/BLOCK_SIZE));
+        norma_a_and_init_col_k_q<<<num_blocks, BLOCK_SIZE>>>(d_a, d_r, d_q, ni, nj, k);
+        gpuErrchk(cudaPeekAtLastError());
     
     }
         /* compute_a<<<dimGrid, dimBlock>>>(d_a, d_r, d_q, ni, nj, k);
