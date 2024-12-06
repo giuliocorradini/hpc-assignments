@@ -97,7 +97,7 @@ __global__ void column_norm(DeviceArr2D A, DeviceArr2D R, int k) {
         R[k][k] = sqrt(norm[0]);
 }
 
-__global__ void copy_to_q(DeviceArr2D A, DeviceArr2D Q, DeviceArr2D R, int k) {
+__global__ void copy_to_q(DeviceArr2D A, DeviceArr2D R, DeviceArr2D Q, int k) {
     //  Q^(k) <- normalized A^(k)
     int SUBCOL = blockIdx.x * blockDim.x;
     int tid = threadIdx.x + SUBCOL;
@@ -109,12 +109,12 @@ __global__ void copy_to_q(DeviceArr2D A, DeviceArr2D Q, DeviceArr2D R, int k) {
 /**
  *  Update R (lower triangular matrix) by multiplying Q^(k) and A_{k+1, y}
  */
-__device__ void recompute(DeviceArr2D A, DeviceArr2D Q, DeviceArr2D R, int k) {
+__device__ void recompute(DeviceArr2D A, DeviceArr2D R, DeviceArr2D Q, int k) {
     int x = blockIdx.x * blockDim.x + threadIdx.x + k;
     int y = blockIdx.y * blockDim.y + threadIdx.y;
 
     //Mi porto in shared memory la k-esima colonna di Q, che viene usata per ogni x 
-    __shared__ DATA_TYPE qk[blockDim.y];
+    __shared__ DATA_TYPE qk[BLOCK_DIM];
 
     if (y < Q.y)
         qk[threadIdx.y] = Q[y][k];
@@ -136,15 +136,15 @@ __device__ void recompute(DeviceArr2D A, DeviceArr2D Q, DeviceArr2D R, int k) {
 //        atomicAdd(&R[k][threadIdx.x], r_kj_partial[threadIdx.x]);
 }
 
-__global__ void update_a(DeviceArr2D A, DeviceArr2D R, DeviceArr Q, int k) {
+__global__ void update_a(DeviceArr2D A, DeviceArr2D R, DeviceArr2D Q, int k) {
 
     int x = blockIdx.x * blockDim.x + threadIdx.x + k;
     int y = blockIdx.y * blockDim.y + threadIdx.y;
 
-    __shared__ DATA_TYPE qk[blockDim.y];    //< k-esima colonna di Q
-    __shared__ DATA_TYPE r_k[blockDim.y];   //< k-esima sottoriga di R per indici di colonna da k+1 a nj (A.y)
+    __shared__ DATA_TYPE qk[BLOCK_DIM];    //< k-esima colonna di Q
+    __shared__ DATA_TYPE r_k[BLOCK_DIM];   //< k-esima sottoriga di R per indici di colonna da k+1 a nj (A.y)
 
-    if (x < R.xi && threadIdx.y == 0)
+    if (x < R.x && threadIdx.y == 0)
         r_k[threadIdx.x] = R[k][x];
 
     if (y < Q.y && threadIdx.y == 0)
@@ -153,6 +153,37 @@ __global__ void update_a(DeviceArr2D A, DeviceArr2D R, DeviceArr Q, int k) {
     if (x < R.x and y < A.y) {
         A[y][x] -= qk[threadIdx.y] * r_k[threadIdx.x];
 
+}
+
+/**
+ *  Host function for gramschmidt computation. Kernels are launched from host with VRAM resident data
+ *  TODO: stream operations
+ */
+void cu_gramschmidt(Arr2D &A, Arr2D &R, Arr2D &Q) {
+    DeviceArr2D dA(ni, nj);
+    DeviceArr2D dR(nj, nj);
+    DeviceArr2D dQ(ni, nj);
+
+    cudaMemcpy(dA.arr, A.arr, sizeof(DATA_TYPE) * A.x * A.y, cudaMemcpyHostToDevice);
+    
+    for (k=0; k<A.x; k++) {
+        column_norm<<<1, BLOCK_DIM>>>(A, R, k);
+        copy_to_q<<<floordiv(A.y, BLOCK_DIM), BLOCK_DIM>>>(A, R, Q, k);
+
+        // Operations on A right edge
+        dim3 block(BLOCK_DIM, BLOCK_DIM);
+        dim3 column_grid(floordiv(A.x-k, BLOCK_DIM), floordiv(A.y, BLOCK_DIM));
+        update_with_basis<<<column_grid, block>>>(A, R, Q, k);
+
+        update_a<<<column_grid, block>>>(A, R, Q, k);
+    }
+    
+    cudaMemcpy(Q.arr, dQ.arr, sizeof(DATA_TYPE) * Q.x * Q.y, cudaMemcpyDeviceToHost);
+    cudaMemcpy(R.arr, dR.arr, sizeof(DATA_TYPE) * R.x * R.y, cudaMemcpyDeviceToHost);
+    
+    dA.free();
+    dR.free();
+    dQ.free();
 }
 
 int main(int argc, char** argv)
@@ -168,38 +199,23 @@ int main(int argc, char** argv)
     /* Initialize array(s). */
     init_array(ni, nj, A, R, Q);
 
-    struct timespec rt[2];
+    struct {
+        struct timespec start;
+        struct timespec finish;
+    } rt;
     double wt;
 
-    /*
-    clock_gettime(CLOCK_REALTIME, rt + 0);
+    clock_gettime(CLOCK_REALTIME, &rt.start);
     kernel_gramschmidt(ni, nj, A, R, Q);
-    clock_gettime(CLOCK_REALTIME, rt + 1);
-    wt = (rt[1].tv_sec - rt[0].tv_sec) + 1.0e-9 * (rt[1].tv_nsec - rt[0].tv_nsec);
-    printf("gramschmidt (Host) : %9.3f sec %9.1f GFLOPS\n", wt, 2.0 * ni * nj * nj / (1.0e9 * wt));
-    */
-
-    DeviceArr2D dA(ni, nj);
-    DeviceArr2D dR(nj, nj);
-    DeviceArr2D dQ(ni, nj);
-
-    for(int i=0; i<A.y; i++)
-        A[i][0] = 1;
-    cudaMemcpy(dA.arr, A.arr, sizeof(DATA_TYPE) * A.x * A.y, cudaMemcpyHostToDevice);
-
-    column_norm<<<1, 32>>>(dA, dR, 0);
-
-    copy_to_q<<<floordiv(A.y, BLOCK_DIM), BLOCK_DIM>>>(dA, dQ, dR, 0);
-
-    cudaMemcpy(Q.arr, dQ.arr, sizeof(DATA_TYPE) * Q.x * Q.y, cudaMemcpyDeviceToHost);
-    for(int i=0; i<Q.y; i++)
-        cout << Q[i][0] << endl;
-
-    dA.free();
-    dR.free();
-    dQ.free();
+    clock_gettime(CLOCK_REALTIME, &rt.finish);
+    wt = (rt.finish.tv_sec - rt.start.tv_sec) + 1.0e-9 * (rt.finish.tv_nsec - rt.start.tv_nsec);
+    printf("gramschmidt (Host) : %9.3f sec %9.1f GFLOPS\n", wt, 2.0 * ni * nj * nj / (1.0e9 * wt)); //TODO: compute GFLOPS correctly
     
-    cout << "Freed memory" << endl;
+    clock_gettime(CLOCK_REALTIME, &rt.start);
+    cu_gramschmidt(A, R, Q);
+    clock_gettime(CLOCK_REALTIME, &rt.finish);
+    wt = (rt.finish.tv_sec - rt.start.tv_sec) + 1.0e-9 * (rt.finish.tv_nsec - rt.start.tv_nsec);
+    printf("gramschmidt (Device) : %9.3f sec %9.1f GFLOPS\n", wt, 2.0 * ni * nj * nj / (1.0e9 * wt));
 
     return 0;
 }
