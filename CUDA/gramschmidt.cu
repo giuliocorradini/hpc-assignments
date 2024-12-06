@@ -109,7 +109,7 @@ __global__ void copy_to_q(DeviceArr2D A, DeviceArr2D R, DeviceArr2D Q, int k) {
 /**
  *  Update R (lower triangular matrix) by multiplying Q^(k) and A_{k+1, y}
  */
-__device__ void recompute(DeviceArr2D A, DeviceArr2D R, DeviceArr2D Q, int k) {
+__global__ void recompute(DeviceArr2D A, DeviceArr2D R, DeviceArr2D Q, int k) {
     int x = blockIdx.x * blockDim.x + threadIdx.x + k;
     int y = blockIdx.y * blockDim.y + threadIdx.y;
 
@@ -123,17 +123,9 @@ __device__ void recompute(DeviceArr2D A, DeviceArr2D R, DeviceArr2D Q, int k) {
         if (blockIdx.y == 0 && threadIdx.y == 0)
             R[k][x] = 0;
     
-        R[k][x] += A[y][x] * Q[y][k];
+        R[k][x] += A[y][x] * qk[threadIdx.y];
 
     }
-
-//non lo posso fare qua nonostante le griglie abbiano la stessa dimensione, perché R_kx non è
-//ancora completo
-        //in base al threadID, faccio gemm tra Q e A e salvo in R[k][j]
-//        for (int ly = threadIdx.y; ly < blockDim.y; ly++) {
-//            r_kj_partial[threadIdx.x] += Q[ly][threadIdx.x] * A[ly][threadIdx.x];
-//        }
-//        atomicAdd(&R[k][threadIdx.x], r_kj_partial[threadIdx.x]);
 }
 
 __global__ void update_a(DeviceArr2D A, DeviceArr2D R, DeviceArr2D Q, int k) {
@@ -150,7 +142,7 @@ __global__ void update_a(DeviceArr2D A, DeviceArr2D R, DeviceArr2D Q, int k) {
     if (y < Q.y && threadIdx.y == 0)
         qk[threadIdx.y] = Q[y][k];
 
-    if (x < R.x and y < A.y) {
+    if (x < R.x and y < A.y)
         A[y][x] -= qk[threadIdx.y] * r_k[threadIdx.x];
 
 }
@@ -160,22 +152,22 @@ __global__ void update_a(DeviceArr2D A, DeviceArr2D R, DeviceArr2D Q, int k) {
  *  TODO: stream operations
  */
 void cu_gramschmidt(Arr2D &A, Arr2D &R, Arr2D &Q) {
-    DeviceArr2D dA(ni, nj);
-    DeviceArr2D dR(nj, nj);
-    DeviceArr2D dQ(ni, nj);
+    DeviceArr2D dA(A.x, A.y);
+    DeviceArr2D dR(R.x, R.y);
+    DeviceArr2D dQ(Q.x, Q.y);
 
     cudaMemcpy(dA.arr, A.arr, sizeof(DATA_TYPE) * A.x * A.y, cudaMemcpyHostToDevice);
     
-    for (k=0; k<A.x; k++) {
-        column_norm<<<1, BLOCK_DIM>>>(A, R, k);
-        copy_to_q<<<floordiv(A.y, BLOCK_DIM), BLOCK_DIM>>>(A, R, Q, k);
+    for (int k=0; k<A.x; k++) {
+        column_norm<<<1, BLOCK_DIM>>>(dA, dR, k);
+        copy_to_q<<<floordiv(A.y, BLOCK_DIM), BLOCK_DIM>>>(dA, dR, dQ, k);
 
         // Operations on A right edge
         dim3 block(BLOCK_DIM, BLOCK_DIM);
         dim3 column_grid(floordiv(A.x-k, BLOCK_DIM), floordiv(A.y, BLOCK_DIM));
-        update_with_basis<<<column_grid, block>>>(A, R, Q, k);
+        recompute<<<column_grid, block>>>(dA, dR, dQ, k);
 
-        update_a<<<column_grid, block>>>(A, R, Q, k);
+        update_a<<<column_grid, block>>>(dA, dR, dQ, k);
     }
     
     cudaMemcpy(Q.arr, dQ.arr, sizeof(DATA_TYPE) * Q.x * Q.y, cudaMemcpyDeviceToHost);
