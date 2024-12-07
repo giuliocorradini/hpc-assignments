@@ -125,25 +125,39 @@ CUDA IMPLEMENTATION
 
 namespace cg = cooperative_groups;
 
-__global__ void norma_a(DATA_TYPE *__restrict__ a, DATA_TYPE *__restrict__ r, DATA_TYPE *__restrict__ q, int ni, int nj, int k) {
+__global__ void norma_a(DATA_TYPE *__restrict__ a, DATA_TYPE *__restrict__ r, int ni, int nj, int k) {
 
-    cg::thread_block cta = cg::this_thread_block();
+    //porto in memlria 32 valori di a
+    __shared__ DATA_TYPE s_a_col_k[BLOCK_SIZE];
 
-    int a_row = blockDim.y*blockIdx.y + threadIdx.y;
+    int a_row = blockDim.y* blockIdx.y + threadIdx.y;
+    int y_thread = threadIdx.y;
+    int x_thread = threadIdx.x;
     if(a_row < ni){
-        DATA_TYPE value = a[a_row*nj + k];
-        value *= value;
-        atomicAdd(&r[k*ni+k], value);
-
-        //sync della grid
-        cg::sync(cta);
-        //un thread, quando tutti gli altri hanno finito di scrivere, calcola la norma
-        if(blockIdx.y==0 && blockIdx.x==0 && threadIdx.y==0 && threadIdx.x==0){
-            r[k*ni+k] = sqrt(r[k*ni+k]);
-        }
-
+        s_a_col_k[threadIdx.y] = a[a_row + k];
+        s_a_col_k[threadIdx.y] *= s_a_col_k[threadIdx.y];
     }
+    __syncthreads();
 
+    //RIDUCZIONE AD IMBUTO
+    //faccio una riduzione da 32 valori ad 1,
+    //svolta prima da 16 thread, poi da 8, poi 4 poi 2 e poi 1
+    //sono secessari log(32) = 5 punti di sincronizzazzione, decisamente meno rispetto
+    //ad un normale calcolo di norm
+    //infine viene eseguita un unica atomic add sul valore in memoria globale 
+    if(a_row < ni){
+        for(int i = 2; i <= blockIdx.y; i*=2){
+            if(y_thread % i == 0){
+                s_a_col_k[y_thread] += s_a_col_k[y_thread+(i/2)];
+            }
+           __syncthreads(); 
+        }
+        //alla fine 1 thread (il primo) svolge l'atomic add per r
+        //dovrebbe bastare solo il controllo sulle x, ma viva la paranoia
+        if(y_thread==0 && x_thread == 0){
+            atomicAdd(&r[k*ni+k], s_a_col_k[y_thread]);
+        }
+    }
 }
 
 __global__ void init_col_k_q(DATA_TYPE *__restrict__ a, DATA_TYPE *__restrict__ r, DATA_TYPE *__restrict__ q, int ni, int nj, int k) {
@@ -155,19 +169,35 @@ __global__ void init_col_k_q(DATA_TYPE *__restrict__ a, DATA_TYPE *__restrict__ 
 }
 __global__ void dot_product_a_q(DATA_TYPE *__restrict__ a, DATA_TYPE *__restrict__ r, DATA_TYPE *__restrict__ q, int ni, int nj, int k) {
 
-    //r è inizializzzata a matrice nulla
-    DATA_TYPE partial_sum = 0;
-    int a_row = blockDim.y*blockIdx.y + threadIdx.y;
-    int a_col = blockDim.x*blockIdx.x + threadIdx.x;
+    
+    //porto in memlria 32 valori di a
+    __shared__ DATA_TYPE s_q_col_k[BLOCK_SIZE];
 
-    if(a_row < ni && a_col > k){
-        for(int j = k; j<nj; j++){
-            partial_sum += a[a_row*nj + a_col] * q[a_row*ni + k];
-        }
-
-        r[k*ni+a_col] = partial_sum;  
+    //Porto in memoria condivisa le sezioni di interesse di a e q
+    int a_row = blockDim.y* blockIdx.y + threadIdx.y;
+    int a_col = blockDim.x* blockIdx.y + threadIdx.x;
+    //coordinate del thread, per chiarezza
+    int y_thread = threadIdx.y;
+    int x_thread = threadIdx.x;
+    if(a_row < ni){
+        //DATO CHE A è letta solo una volta, non serve portarla in memoria condivisa
+        s_q_col_k[threadIdx.y] = a[a_row + a_col] * q[a_row + k];
     }
+    __syncthreads();
 
+    //RIDUCZIONE AD IMBUTO
+    if(a_row < ni){
+        for(int i = 2; i <= blockIdx.y; i*=2){
+            if(y_thread % i == 0){
+                s_q_col_k[y_thread] += s_q_col_k[y_thread+(i/2)];
+            }
+           __syncthreads(); 
+        }
+        //alla fine l'ultimo del blocco thread aggiorna la memoria condivisa
+        if(y_thread==0 && x_thread == 0){
+            atomicAdd(&r[k*ni+a_col], s_q_col_k[y_thread]);
+        }
+    }
 }
 
 __global__ void update_a(DATA_TYPE *__restrict__ a, DATA_TYPE *__restrict__ r, DATA_TYPE *__restrict__ q, int ni, int nj, int k) {
@@ -229,7 +259,7 @@ int main(int argc, char** argv)
         //KERNEL PER CALCOLO DI NORM A - DIM BLOCK limitata a 32*1
         //uso un thread per riga
         num_blocks = (ni + BLOCK_SIZE - 1) / BLOCK_SIZE;
-        norma_a<<<num_blocks, BLOCK_SIZE>>>(d_a, d_r, d_q, ni, nj, k);
+        norma_a<<<num_blocks, BLOCK_SIZE>>>(d_a, d_r, ni, nj, k);
         gpuErrchk(cudaPeekAtLastError());
         
         //INIZIALIZZO COLONNA k DI Q - La grid ha la stessa dimensione
