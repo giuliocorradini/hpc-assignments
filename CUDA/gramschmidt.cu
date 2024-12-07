@@ -12,7 +12,6 @@ using namespace std;
 #include "gramschmidt.h"
 #include "matrix.h"
 
-#include "host_kernel.h"
 
 extern "C"
 {
@@ -23,6 +22,8 @@ extern "C"
 #define BLOCK_DIM 32
 #endif
 
+#include "host_kernel.h"
+#include "gramschmidt_kernel.cuh"
 
 /* Array initialization. */
 static void init_array(int ni, int nj, Arr2D &A, Arr2D &R, Arr2D &Q) {
@@ -67,87 +68,6 @@ static void print_array(int ni, int nj, Arr2D &A, Arr2D &R, Arr2D &Q) {
 }
 
 /**
- *  Computes the normalization of the k-st column of A using a reduction in shared memory.
- *  The kernel is launched once, with a single block of dimension BLOCK_DIM.
- *
- *  Returns the norm of A^(k) in R[k][k]
- */
-__global__ void column_norm(DeviceArr2D A, DeviceArr2D R, int k) {
-    __shared__ DATA_TYPE norm[BLOCK_DIM];
-
-    //IMPROVEMENT: bring A^(k) in shmem
-
-    int SUBCOL_DIM = floordiv(A.y, blockDim.x);
-
-    for (int ly=threadIdx.x; ly < threadIdx.x + SUBCOL_DIM; ly++) {
-        if (ly < A.y)
-            norm[threadIdx.x] += A[ly][k] * A[ly][k];
-        else
-            norm[threadIdx.x] = 0;
-    }
-    __syncthreads();
-
-    for (int b=blockDim.x / 2; b>0; b >>= 1) {  //  funnel pattern of reduction
-        if (threadIdx.x < b)
-            norm[threadIdx.x] += norm[threadIdx.x + b];
-        __syncthreads();
-    }
-
-    if (threadIdx.x == 0)
-        R[k][k] = sqrt(norm[0]);
-}
-
-__global__ void copy_to_q(DeviceArr2D A, DeviceArr2D R, DeviceArr2D Q, int k) {
-    //  Q^(k) <- normalized A^(k)
-    int SUBCOL = blockIdx.x * blockDim.x;
-    int tid = threadIdx.x + SUBCOL;
-
-    if (tid < A.y)
-       Q[tid][k] = A[tid][k] / R[k][k];
-}
-
-/**
- *  Update R (lower triangular matrix) by multiplying Q^(k) and A_{k+1, y}
- */
-__global__ void recompute(DeviceArr2D A, DeviceArr2D R, DeviceArr2D Q, int k) {
-    int x = blockIdx.x * blockDim.x + threadIdx.x + k;
-    int y = blockIdx.y * blockDim.y + threadIdx.y;
-
-    //Mi porto in shared memory la k-esima colonna di Q, che viene usata per ogni x 
-    __shared__ DATA_TYPE qk[BLOCK_DIM];
-
-    if (y < Q.y)
-        qk[threadIdx.y] = Q[y][k];
-
-    if (x < R.x and y < A.y) {
-        if (blockIdx.y == 0 && threadIdx.y == 0)
-            R[k][x] = 0;
-    
-        R[k][x] += A[y][x] * qk[threadIdx.y];
-
-    }
-}
-
-__global__ void update_a(DeviceArr2D A, DeviceArr2D R, DeviceArr2D Q, int k) {
-
-    int x = blockIdx.x * blockDim.x + threadIdx.x + k;
-    int y = blockIdx.y * blockDim.y + threadIdx.y;
-
-    __shared__ DATA_TYPE qk[BLOCK_DIM];    //< k-esima colonna di Q
-    __shared__ DATA_TYPE r_k[BLOCK_DIM];   //< k-esima sottoriga di R per indici di colonna da k+1 a nj (A.y)
-
-    if (x < R.x && threadIdx.y == 0)
-        r_k[threadIdx.x] = R[k][x];
-
-    if (y < Q.y && threadIdx.y == 0)
-        qk[threadIdx.y] = Q[y][k];
-
-    if (x < R.x and y < A.y)
-        A[y][x] -= qk[threadIdx.y] * r_k[threadIdx.x];
-
-}
-
-/**
  *  Host function for gramschmidt computation. Kernels are launched from host with VRAM resident data
  *  TODO: stream operations
  */
@@ -170,6 +90,7 @@ void cu_gramschmidt(Arr2D &A, Arr2D &R, Arr2D &Q) {
         update_a<<<column_grid, block>>>(dA, dR, dQ, k);
     }
     
+    cudaMemcpy(A.arr, dA.arr, sizeof(DATA_TYPE) * A.x * A.y, cudaMemcpyDeviceToHost);
     cudaMemcpy(Q.arr, dQ.arr, sizeof(DATA_TYPE) * Q.x * Q.y, cudaMemcpyDeviceToHost);
     cudaMemcpy(R.arr, dR.arr, sizeof(DATA_TYPE) * R.x * R.y, cudaMemcpyDeviceToHost);
     
@@ -188,8 +109,13 @@ int main(int argc, char** argv)
     Arr2D R(nj, nj);
     Arr2D Q(ni, nj);
 
+    Arr2D Agpu(ni, nj);
+    Arr2D Rgpu(nj, nj);
+    Arr2D Qgpu(ni, nj);
+
     /* Initialize array(s). */
     init_array(ni, nj, A, R, Q);
+    init_array(ni, nj, Agpu, Rgpu, Qgpu);
 
     struct {
         struct timespec start;
@@ -204,10 +130,27 @@ int main(int argc, char** argv)
     printf("gramschmidt (Host) : %9.3f sec %9.1f GFLOPS\n", wt, 2.0 * ni * nj * nj / (1.0e9 * wt)); //TODO: compute GFLOPS correctly
     
     clock_gettime(CLOCK_REALTIME, &rt.start);
-    cu_gramschmidt(A, R, Q);
+    cu_gramschmidt(Agpu, Rgpu, Qgpu);
     clock_gettime(CLOCK_REALTIME, &rt.finish);
     wt = (rt.finish.tv_sec - rt.start.tv_sec) + 1.0e-9 * (rt.finish.tv_nsec - rt.start.tv_nsec);
     printf("gramschmidt (Device) : %9.3f sec %9.1f GFLOPS\n", wt, 2.0 * ni * nj * nj / (1.0e9 * wt));
 
+    for (int i=0; i<Agpu.x; i++) {
+        for (int j=0; j<Agpu.y; j++)
+//            cout << Agpu[i][j] << " ";
+//        cout << endl;
+            if (Agpu[i][j] != A[i][j]) {
+                cout << "at " << i << " " << j << endl;
+                cout << "gpu: " << Agpu[i][j] << " host: " << A[i][j] << endl;
+            }
+    }
+
+    for (int i=0; i<Rgpu.x; i++)
+        for (int j=0; j<Agpu.y; j++)
+            assert(Rgpu[i][j] == R[i][j]);
+    
+    for (int i=0; i<Qgpu.x; i++)
+        for (int j=0; j<Agpu.y; j++)
+            assert(Qgpu[i][j] == Q[i][j]);
     return 0;
 }
