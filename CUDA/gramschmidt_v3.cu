@@ -187,9 +187,10 @@ __global__ void dot_product_a_q(DATA_TYPE *__restrict__ a, DATA_TYPE *__restrict
 __global__ void update_a(DATA_TYPE *__restrict__ a, DATA_TYPE *__restrict__ r, DATA_TYPE *__restrict__ q, int ni, int nj, int k) {
     
     int a_row = blockDim.y*blockIdx.y + threadIdx.y;
-    int a_col = blockDim.x*blockIdx.x + threadIdx.x;
+    //offset dovuto a k per tenere conto del restringimento della grid
+    int a_col = (k/blockDim.x) + blockDim.x*blockIdx.x + threadIdx.x;
 
-    if(a_row < ni && a_col > k){
+    if(a_col > k && a_row < ni){
         //è per chiarezza, il compilatore poi propaga il valore
         DATA_TYPE result = a[a_row*ni + a_col] - q[a_row*ni + k] * r[k*ni+a_col];
         //aggiorno il valore, non c'è concorrenza stavolta
@@ -257,8 +258,9 @@ int main(int argc, char** argv)
 
         //AVENDO IN R IL PRODOTTO SCALARE POSSO AGGIORNARE A, stavolta con un kernel parallelo
         //le dimensioni sono le stesse dell'operazione precedente
+        //la griglia si restringe con l'aumentare di k per creare solo i thread necessari
         dim3 dimBlock(BLOCK_SIZE,BLOCK_SIZE);
-        dim3 dimGrid((nj + BLOCK_SIZE - 1)/BLOCK_SIZE, ((ni + BLOCK_SIZE - 1)/BLOCK_SIZE));
+        dim3 dimGrid((nj + BLOCK_SIZE - 1 - k)/BLOCK_SIZE, ((ni + BLOCK_SIZE - 1)/BLOCK_SIZE));
         update_a<<<dimGrid, dimBlock>>>(d_a, d_r, d_q, ni, nj, k);
         gpuErrchk(cudaPeekAtLastError());
     
