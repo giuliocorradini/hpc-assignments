@@ -5,6 +5,8 @@
 #include <cuda_runtime.h>
 
 #include <iostream>
+using namespace std;
+#include <cassert>
 
 #define gpuErrchk(ans)                        \
     {                                         \
@@ -42,7 +44,7 @@ static void init_array(int ni, int nj, Arr2D &A, Arr2D &R, Arr2D &Q) {
 
     for (i = 0; i < ni; i++)
         for (j = 0; j < nj; j++) {
-            A[i][j] = ((DATA_TYPE)i * j) / ni;
+            A[i][j] = ((DATA_TYPE)(i+1) * (j+1)) / ni;
             Q[i][j] = ((DATA_TYPE)i * (j + 1)) / nj;
         }
     for (i = 0; i < nj; i++)
@@ -260,7 +262,30 @@ int main(int argc, char** argv)
     wt = (rt[1].tv_sec - rt[0].tv_sec) + 1.0e-9 * (rt[1].tv_nsec - rt[0].tv_nsec);
     printf("gramschmidt  (GPU) : %9.3f sec %9.1f GFLOPS\n", wt, 2.0 * ni * nj * nj / (1.0e9 * wt));
 
-   
+    Arr2D Ah(ni, nj);
+    Arr2D Qh(ni, nj);
+    Arr2D Rh(nj, nj);
+    kernel_gramschmidt(ni, nj, Ah, Rh, Qh);
+
+    for (int i=0; i<ni; i++)
+        for (int j=0; j<nj; j++)
+            if (Ah[i][j] != a[ni * i + j]) {
+                cout << "error: " << i << " " << j << endl;
+                cout << Ah[i][j] << " " << a[ni * i + j] << endl;
+                assert(false);
+            }
+    for (int i=0; i<ni; i++)
+        for (int j=0; j<nj; j++)
+            if (Qh[i][j] != q[ni * i + j]) {
+                cout << "error: " << i << " " << j << endl;
+                assert(false);
+            }
+    for (int i=0; i<nj; i++)
+        for (int j=0; j<nj; j++)
+            if (Rh[i][j] != r[nj * i + j]) {
+                cout << "error: " << i << " " << j << endl;
+                assert(false);
+            }
     
     #ifdef PRINT_DEBUG
     //ritraspongo le matrici in caso si voglia stamparle
