@@ -36,20 +36,6 @@ extern "C"
 {
 #include "utils.h"
 }
-
-/**Funzione per trasformare la matrice in trasposta */
-static void transpose_matrix(int ni, int nj, DATA_TYPE* M, DATA_TYPE* M_T)
-{
-    // Transpose the matrix M, to read its columns into cache as rows
-#pragma omp parallel for simd num_threads(NTHREADS) schedule(static) collapse(2)
-    for (int i = 0; i < ni; i++) {
-        for (int j = 0; j < nj; j++) {
-            M_T[j * nj + i] = M[i * ni + j];
-        }
-    }
-}
-
-
 /* Array initialization. */
 static void init_array(int ni, int nj, Arr2D &A, Arr2D &R, Arr2D &Q) {
     int i, j;
