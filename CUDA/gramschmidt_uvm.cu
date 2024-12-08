@@ -26,7 +26,7 @@ extern "C"
 #include "gramschmidt_kernel.cuh"
 
 /* Array initialization. */
-static void init_array(int ni, int nj, Arr2D &A, Arr2D &R, Arr2D &Q) {
+static void init_array(int ni, int nj, UVMArr2D &A, UVMArr2D &R, UVMArr2D &Q) {
     int i, j;
 
     for (i = 0; i < ni; i++)
@@ -41,7 +41,7 @@ static void init_array(int ni, int nj, Arr2D &A, Arr2D &R, Arr2D &Q) {
 
 /* DCE code. Must scan the entire live-out data.
    Can be used also to check the correctness of the output. */
-static void print_array(int ni, int nj, Arr2D &A, Arr2D &R, Arr2D &Q) {
+static void print_array(int ni, int nj, UVMArr2D &A, UVMArr2D &R, UVMArr2D &Q) {
     int i, j;
 
     for (i = 0; i < ni; i++)
@@ -71,33 +71,19 @@ static void print_array(int ni, int nj, Arr2D &A, Arr2D &R, Arr2D &Q) {
  *  Host function for gramschmidt computation. Kernels are launched from host with VRAM resident data
  *  TODO: stream operations
  */
-void cu_gramschmidt(Arr2D &A, Arr2D &R, Arr2D &Q) {
-    DeviceArr2D dA(A.x, A.y);
-    DeviceArr2D dR(R.x, R.y);
-    DeviceArr2D dQ(Q.x, Q.y);
-
-    cudaMemcpy(dA.arr, A.arr, sizeof(DATA_TYPE) * A.x * A.y, cudaMemcpyHostToDevice);
-    
-    for (int k=0; k<A.x; k++) {
+void cu_gramschmidt(UVMArr2D &dA, UVMArr2D &dR, UVMArr2D &dQ) {
+    for (int k=0; k<dA.x; k++) {
         column_norm<<<1, 32>>>(dA, dR, 2);
-        copy_to_q<<<floordiv(A.y, BLOCK_DIM), BLOCK_DIM>>>(dA, dR, dQ, k);
+        copy_to_q<<<floordiv(dA.y, BLOCK_DIM), BLOCK_DIM>>>(dA, dR, dQ, k);
 
         dim3 dimBlock_a_q(1,BLOCK_DIM);             //sono colonne verticali
-        dim3 dimGrid_a_q(A.x-k, (A.y + BLOCK_DIM - 1)/BLOCK_DIM);    //1 x #colonne
-        column_product_a_q<<<dimGrid_a_q, dimBlock_a_q>>>(dA.arr, dR.arr, dQ.arr, A.x, A.y, k);
+        dim3 dimGrid_a_q(dA.x-k, (dA.y + BLOCK_DIM - 1)/BLOCK_DIM);    //1 x #colonne
+        column_product_a_q<<<dimGrid_a_q, dimBlock_a_q>>>(dA.arr, dR.arr, dQ.arr, dA.x, dA.y, k);
 
         dim3 dimBlock(BLOCK_DIM, BLOCK_DIM);
         dim3 dimGrid(1, 1);
         update_a<<<dimGrid, dimBlock>>>(dA, dR, dQ, k);
     }
-    
-    cudaMemcpy(A.arr, dA.arr, sizeof(DATA_TYPE) * A.x * A.y, cudaMemcpyDeviceToHost);
-    cudaMemcpy(Q.arr, dQ.arr, sizeof(DATA_TYPE) * Q.x * Q.y, cudaMemcpyDeviceToHost);
-    cudaMemcpy(R.arr, dR.arr, sizeof(DATA_TYPE) * R.x * R.y, cudaMemcpyDeviceToHost);
-    
-    dA.free();
-    dR.free();
-    dQ.free();
 }
 
 int main(int argc, char** argv)
@@ -106,13 +92,13 @@ int main(int argc, char** argv)
     int ni = NI;
     int nj = NJ;
 
-    Arr2D A(ni, nj);
-    Arr2D R(nj, nj);
-    Arr2D Q(ni, nj);
+    UVMArr2D A(ni, nj);
+    UVMArr2D R(nj, nj);
+    UVMArr2D Q(ni, nj);
 
-    Arr2D Agpu(ni, nj);
-    Arr2D Rgpu(nj, nj);
-    Arr2D Qgpu(ni, nj);
+    UVMArr2D Agpu(ni, nj);
+    UVMArr2D Rgpu(nj, nj);
+    UVMArr2D Qgpu(ni, nj);
 
     /* Initialize array(s). */
     init_array(ni, nj, A, R, Q);

@@ -37,12 +37,30 @@ public:
         cudaMalloc(&arr, sizeof(DATA_TYPE) * x * y);
     }
 
+    DeviceArr2D() {
+        
+    }
+
     void free() {
         cudaFree(arr);
     }
 
 
     __device__ constexpr DATA_TYPE * operator[] (int i) {
+        return arr + i * x;
+    }
+};
+
+class UVMArr2D: public DeviceArr2D
+{
+    public:
+    UVMArr2D(int x, int y) {
+        this->x = x;
+        this->y = y;
+        cudaMallocManaged(&arr, sizeof(DATA_TYPE) * x * y);
+    }
+
+    constexpr DATA_TYPE * operator[] (int i) {
         return arr + i * x;
     }
 };
