@@ -164,7 +164,7 @@ __global__ void init_col_k_q(DATA_TYPE *__restrict__ a, DATA_TYPE *__restrict__ 
 
     int a_row = blockDim.y*blockIdx.y + threadIdx.y;
     if(a_row < ni){
-        q[a_row*nj + k] = a[a_row*nj + k] / r[k*ni+k];
+        q[a_row*nj + k] = a[a_row*nj + k] / sqrt(r[k*ni+k]);
     }
 }
 __global__ void dot_product_a_q(DATA_TYPE *__restrict__ a, DATA_TYPE *__restrict__ r, DATA_TYPE *__restrict__ q, int ni, int nj, int k) {
