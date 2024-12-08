@@ -103,10 +103,41 @@ void recompute_first_row() {
     gold_std(DIM, DIM, gsA, gsR, gsQ);
 
     //Assert
+    cout << R[0][0] << " " << gsR[0][0] << endl;
+    assert(abs(R[0][0] - gsR[0][0]) < 10e-4);
     cout << R[0][1] << " " << gsR[0][1] << endl;
-    //assert(R[0][1] == gsR[0][1]);
+    assert(abs(R[0][1] - gsR[0][1]) < 10e-4);
     cout << R[0][2] << " " << gsR[0][2] << endl;
-    assert(R[0][2] == gsR[0][2]);
+    assert(abs(R[0][2] - gsR[0][2]) < 10e-4);
+
+    cout << "A:" << endl;
+    for (int i=0; i<A.y; i++) {
+        for (int j=0; j<A.x; j++)
+            cout << A[i][j] << " ";
+        cout << endl;
+    }
+            
+    cout << "gsA:" << endl;
+    for (int i=0; i<A.y; i++) {
+        for (int j=0; j<A.x; j++)
+            cout << gsA[i][j] << " ";
+        cout << endl;
+    }
+
+    cout << "R:" << endl;
+    for (int i=0; i<R.y; i++) {
+        for (int j=0; j<R.x; j++)
+            cout << R[i][j] << " ";
+        cout << endl;
+    }
+            
+    cout << "gsR:" << endl;
+    for (int i=0; i<R.y; i++) {
+        for (int j=0; j<R.x; j++)
+            cout << gsR[i][j] << " ";
+        cout << endl;
+    }
+            
 
 }
 /**

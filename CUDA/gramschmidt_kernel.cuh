@@ -69,13 +69,10 @@ __global__ void column_product_a_q(DATA_TYPE *__restrict__ a, DATA_TYPE *__restr
     //porto in memlria 32 valori di a
     __shared__ DATA_TYPE s_q_col_k[BLOCK_DIM];
 
-    int thisCol = blockIdx.x + k;
-    int thisRow = blockIdx.y * blockDim.y + threadIdx.y;
-
     //Porto in memoria condivisa le sezioni di interesse di a e q
     int a_row = blockDim.y* blockIdx.y + threadIdx.y;
-    int a_col = k + blockIdx.x * blockDim.x;
-    if(a_row < ni){
+    int a_col = k + blockIdx.x * blockDim.x + 1;
+    if(a_row < ni and a_col < nj){  //TODO: check this
         //DATO CHE A è letta solo una volta, non serve portarla in memoria condivisa
         s_q_col_k[threadIdx.y] = a[a_row *ni + a_col] * q[a_row *ni + k];
     }
@@ -100,16 +97,18 @@ __global__ void update_a(DeviceArr2D A, DeviceArr2D R, DeviceArr2D Q, int k) {
     int x = blockIdx.x * blockDim.x + threadIdx.x + k;
     int y = blockIdx.y * blockDim.y + threadIdx.y;
 
-    __shared__ DATA_TYPE qk[BLOCK_DIM];    //< k-esima colonna di Q
+    /*__shared__ DATA_TYPE qk[BLOCK_DIM];    //< k-esima colonna di Q
     __shared__ DATA_TYPE r_k[BLOCK_DIM];   //< k-esima sottoriga di R per indici di colonna da k+1 a nj (A.y)
 
     if (x < R.x && threadIdx.y == 0)
         r_k[threadIdx.x] = R[k][x];
 
     if (y < Q.y && threadIdx.y == 0)
-        qk[threadIdx.y] = Q[y][k];
+        qk[threadIdx.y] = Q[y][k];*/
 
-    if (x < R.x and y < A.y)
-        A[y][x] -= qk[threadIdx.y] * r_k[threadIdx.x];
+    if (x < R.x and y < A.y){
+        A[y][x] -= Q[y][k] * R[k][x];
+        __syncthreads();
+        }
 
 }
