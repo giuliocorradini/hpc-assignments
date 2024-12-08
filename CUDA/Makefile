@@ -49,7 +49,7 @@ test: $(BUILD_DIR)/tests/$(TEST).o
 	$(NVCC) $(NVCFLAGS) $< -o $(BUILD_DIR)/tests/$(TEST:.cu=.exe) $(NVLDFLAGS)
 	$(BUILD_DIR)/tests/$(TEST:.cu=.exe)
 
-$(BUILD_DIR)/tests/%.cu.o: tests/%.cu
+$(BUILD_DIR)/tests/%.cu.o: tests/%.cu gramschmidt_kernel.cuh
 	$(MKDIR_P) $(dir $@)
 	$(NVCC) $(NVCFLAGS) -c $< -o $@
 
