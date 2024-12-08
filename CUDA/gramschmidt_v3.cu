@@ -42,7 +42,7 @@ static void init_array(int ni, int nj, Arr2D &A, Arr2D &R, Arr2D &Q) {
 
     for (i = 0; i < ni; i++)
         for (j = 0; j < nj; j++) {
-            A[i][j] = ((DATA_TYPE)i * j) / ni;
+            A[i][j] = ((DATA_TYPE)i+1 * j+1) / ni;
             Q[i][j] = ((DATA_TYPE)i * (j + 1)) / nj;
         }
     for (i = 0; i < nj; i++)
@@ -213,15 +213,30 @@ int main(int argc, char** argv)
     Arr2D R(nj, nj);
     Arr2D Q(ni, nj);
 
+    Arr2D dA(ni, nj);
+    Arr2D dR(nj, nj);
+    Arr2D dQ(ni, nj);
+
     /* Initialize array(s). */
     init_array(ni, nj, A, R, Q);
 
     struct timespec rt[2];
     double wt;
 
-    DATA_TYPE *a =A.arr;
-    DATA_TYPE *q =Q.arr; 
-    DATA_TYPE *r =R.arr; 
+    //SEQUENZIALE
+    clock_gettime(CLOCK_REALTIME, rt + 0);
+
+    kernel_gramschmidt(ni, nj, A, R, Q);
+
+    clock_gettime(CLOCK_REALTIME, rt + 1);
+    wt = (rt[1].tv_sec - rt[0].tv_sec) + 1.0e-9 * (rt[1].tv_nsec - rt[0].tv_nsec);
+    printf("gramschmidt (Host) : %9.3f sec %9.1f GFLOPS\n", wt, 2.0 * ni * nj * nj / (1.0e9 * wt));
+
+    init_array(ni, nj, dA, dR, dQ);
+    //PARALLELO SU GPU
+    DATA_TYPE *a =dA.arr;
+    DATA_TYPE *q =dQ.arr; 
+    DATA_TYPE *r =dR.arr; 
 
     //allocazione memoria A,R,Q (R probabilmente non serve, si può rispatmiare spazio)
     cudaMallocHost((void **)&a, sizeof(DATA_TYPE) * ni * nj);
@@ -280,12 +295,14 @@ int main(int argc, char** argv)
     clock_gettime(CLOCK_REALTIME, rt + 1);
     wt = (rt[1].tv_sec - rt[0].tv_sec) + 1.0e-9 * (rt[1].tv_nsec - rt[0].tv_nsec);
     printf("gramschmidt  (GPU) : %9.3f sec %9.1f GFLOPS\n", wt, 2.0 * ni * nj * nj / (1.0e9 * wt));
-
-   
     
     #ifdef PRINT_DEBUG
-    //ritraspongo le matrici in caso si voglia stamparle
-    print_array(ni, nj, A, R, Q);
+        for(int i = 0; i<nj; i++){
+            for(int j = 0; j<ni; j++){
+                if(A[i][j] == dA[i][j])
+                    cout<<"("<<i<<","<<j<<") *** CPU: "<<A[i][j]<<" *** GPU: "<<dA[i][j]<<endl;
+            }
+        }
     #endif
 
     //FREE HOST MEMORY
