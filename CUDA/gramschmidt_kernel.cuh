@@ -94,21 +94,10 @@ __global__ void column_product_a_q(DATA_TYPE *__restrict__ a, DATA_TYPE *__restr
 
 __global__ void update_a(DeviceArr2D A, DeviceArr2D R, DeviceArr2D Q, int k) {
 
-    int x = blockIdx.x * blockDim.x + threadIdx.x + k;
+    int x = blockIdx.x * blockDim.x + threadIdx.x + k + 1;
     int y = blockIdx.y * blockDim.y + threadIdx.y;
 
-    /*__shared__ DATA_TYPE qk[BLOCK_DIM];    //< k-esima colonna di Q
-    __shared__ DATA_TYPE r_k[BLOCK_DIM];   //< k-esima sottoriga di R per indici di colonna da k+1 a nj (A.y)
-
-    if (x < R.x && threadIdx.y == 0)
-        r_k[threadIdx.x] = R[k][x];
-
-    if (y < Q.y && threadIdx.y == 0)
-        qk[threadIdx.y] = Q[y][k];*/
-
-    if (x < R.x and y < A.y){
-        A[y][x] -= Q[y][k] * R[k][x];
-        __syncthreads();
-        }
+    if (x < R.x and y < A.y)
+        A[y][x] -= Q[y][k] * R[k][x];   //TODO: formally correct, but does not produce results
 
 }
