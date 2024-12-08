@@ -32,6 +32,7 @@ using namespace std;
 #include "gramschmidt.h"
 #include "matrix.h"
 
+
 extern "C"
 {
 #include "utils.h"
@@ -56,12 +57,12 @@ static void init_array(int ni, int nj, Arr2D &A, Arr2D &R, Arr2D &Q) {
 
     for (i = 0; i < ni; i++)
         for (j = 0; j < nj; j++) {
-            A[i][j] = ((DATA_TYPE)i * j) / ni;
-            Q[i][j] = ((DATA_TYPE)i * (j + 1)) / nj;
+            A[i][j] = ((DATA_TYPE)(i+1) * (j+1)) / ni;
+            Q[i][j] = 0;
         }
     for (i = 0; i < nj; i++)
         for (j = 0; j < nj; j++)
-            R[i][j] = ((DATA_TYPE)i * (j + 2)) / nj;
+            R[i][j] = 0;
 }
 
 /* DCE code. Must scan the entire live-out data.
@@ -115,9 +116,11 @@ static void kernel_gramschmidt(int ni, int nj, Arr2D &A, Arr2D &R, Arr2D &Q) {
         for (i = 0; i < ni; i++)
             Q[k][i] = A[k][i] / R[k][k];
 
-        // Per ogni colonna successiva alla k-esima (definita nell'outer loop)
-        for (j = k + 1; j < nj; j++) {
-            R[k][j] = 0;
+    cudaMemcpy(dA.arr, A.arr, sizeof(DATA_TYPE) * A.x * A.y, cudaMemcpyHostToDevice);
+    
+    for (int k=0; k<A.x; k++) {
+        column_norm<<<1, BLOCK_DIM>>>(dA, dR, k);
+        copy_to_q<<<floordiv(A.y, BLOCK_DIM), BLOCK_DIM>>>(dA, dR, dQ, k);
 
             // R alla riga k, colonna j è il prodotto della k-esima colonna di Q per la j-esima colonna di A
             for (i = 0; i < ni; i++)
@@ -128,6 +131,14 @@ static void kernel_gramschmidt(int ni, int nj, Arr2D &A, Arr2D &R, Arr2D &Q) {
                 A[j][i] = A[j][i] - Q[k][i] * R[k][j];
         }
     }
+    
+    cudaMemcpy(A.arr, dA.arr, sizeof(DATA_TYPE) * A.x * A.y, cudaMemcpyDeviceToHost);
+    cudaMemcpy(Q.arr, dQ.arr, sizeof(DATA_TYPE) * Q.x * Q.y, cudaMemcpyDeviceToHost);
+    cudaMemcpy(R.arr, dR.arr, sizeof(DATA_TYPE) * R.x * R.y, cudaMemcpyDeviceToHost);
+    
+    dA.free();
+    dR.free();
+    dQ.free();
 }
 
 /**********************************************
@@ -165,10 +176,18 @@ int main(int argc, char** argv)
     Arr2D A_T(ni, nj);
     Arr2D Q_T(ni, nj);
 
+    Arr2D Agpu(ni, nj);
+    Arr2D Rgpu(nj, nj);
+    Arr2D Qgpu(ni, nj);
+
     /* Initialize array(s). */
     init_array(ni, nj, A, R, Q);
+    init_array(ni, nj, Agpu, Rgpu, Qgpu);
 
-    struct timespec rt[2];
+    struct {
+        struct timespec start;
+        struct timespec finish;
+    } rt;
     double wt;
 
 

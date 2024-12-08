@@ -1,0 +1,1 @@
+make VERSION=gramschmidt.cu NVCFLAGS=--expt-relaxed-constexpr clean all run

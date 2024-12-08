@@ -35,4 +35,3 @@
 # endif /* !N */
 
 using DATA_TYPE = float;
-

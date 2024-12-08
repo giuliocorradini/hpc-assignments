@@ -17,7 +17,7 @@ NVOPT:=-Xcompiler -fopenmp -lineinfo -arch=sm_53 --ptxas-options=-v --use_fast_m
 CXXFLAGS:=$(OPT) -I. $(EXT_CXXFLAGS)
 LDFLAGS:=-lm -lcudart $(EXT_LDFLAGS)
 
-NVCFLAGS:=$(CXXFLAGS) $(NVOPT)
+NVCFLAGS:=$(CXXFLAGS) $(NVOPT) --expt-relaxed-constexpr
 NVLDFLAGS:=$(LDFLAGS) -lgomp
 
 SRCS:= utils.c
@@ -41,6 +41,18 @@ $(BUILD_DIR)/%.c.o: %.c
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
 all: $(EXE)
+
+TEST ?= test.cu
+
+test: $(BUILD_DIR)/tests/$(TEST).o
+	$(MKDIR_P) $(dir $(BUILD_DIR)/tests/$(TEST))
+	$(NVCC) $(NVCFLAGS) $< -o $(BUILD_DIR)/tests/$(TEST:.cu=.exe) $(NVLDFLAGS)
+	$(BUILD_DIR)/tests/$(TEST:.cu=.exe)
+
+$(BUILD_DIR)/tests/%.cu.o: tests/%.cu gramschmidt_kernel.cuh
+	$(MKDIR_P) $(dir $@)
+	$(NVCC) $(NVCFLAGS) -c $< -o $@
+
 
 .PHONY: run profile clean
 run: $(EXE)
