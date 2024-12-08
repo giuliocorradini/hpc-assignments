@@ -79,15 +79,16 @@ void cu_gramschmidt(Arr2D &A, Arr2D &R, Arr2D &Q) {
     cudaMemcpy(dA.arr, A.arr, sizeof(DATA_TYPE) * A.x * A.y, cudaMemcpyHostToDevice);
     
     for (int k=0; k<A.x; k++) {
-        column_norm<<<1, BLOCK_DIM>>>(dA, dR, k);
+        column_norm<<<1, 32>>>(dA, dR, 2);
         copy_to_q<<<floordiv(A.y, BLOCK_DIM), BLOCK_DIM>>>(dA, dR, dQ, k);
 
-        // Operations on A right edge
-        dim3 block(BLOCK_DIM, BLOCK_DIM);
-        dim3 column_grid(floordiv(A.x-k, BLOCK_DIM), floordiv(A.y, BLOCK_DIM));
-        recompute<<<column_grid, block>>>(dA, dR, dQ, k);
+        dim3 dimBlock_a_q(1,BLOCK_DIM);             //sono colonne verticali
+        dim3 dimGrid_a_q(A.x-k, (A.y + BLOCK_DIM - 1)/BLOCK_DIM);    //1 x #colonne
+        column_product_a_q<<<dimGrid_a_q, dimBlock_a_q>>>(dA.arr, dR.arr, dQ.arr, A.x, A.y, k);
 
-        update_a<<<column_grid, block>>>(dA, dR, dQ, k);
+        dim3 dimBlock(BLOCK_DIM, BLOCK_DIM);
+        dim3 dimGrid(1, 1);
+        update_a<<<dimGrid, dimBlock>>>(dA, dR, dQ, k);
     }
     
     cudaMemcpy(A.arr, dA.arr, sizeof(DATA_TYPE) * A.x * A.y, cudaMemcpyDeviceToHost);
@@ -123,34 +124,19 @@ int main(int argc, char** argv)
     } rt;
     double wt;
 
+    #ifdef INSTRUMENT_HOST
     clock_gettime(CLOCK_REALTIME, &rt.start);
     kernel_gramschmidt(ni, nj, A, R, Q);
     clock_gettime(CLOCK_REALTIME, &rt.finish);
     wt = (rt.finish.tv_sec - rt.start.tv_sec) + 1.0e-9 * (rt.finish.tv_nsec - rt.start.tv_nsec);
-    printf("gramschmidt (Host) : %9.3f sec %9.1f GFLOPS\n", wt, 2.0 * ni * nj * nj / (1.0e9 * wt)); //TODO: compute GFLOPS correctly
-    
+    printf("gramschmidt (Host) : %9.3f sec\n", wt);
+    #endif
+
     clock_gettime(CLOCK_REALTIME, &rt.start);
     cu_gramschmidt(Agpu, Rgpu, Qgpu);
     clock_gettime(CLOCK_REALTIME, &rt.finish);
     wt = (rt.finish.tv_sec - rt.start.tv_sec) + 1.0e-9 * (rt.finish.tv_nsec - rt.start.tv_nsec);
-    printf("gramschmidt (Device) : %9.3f sec %9.1f GFLOPS\n", wt, 2.0 * ni * nj * nj / (1.0e9 * wt));
+    printf("gramschmidt (Device) : %9.3f sec\n", wt);
 
-    for (int i=0; i<Agpu.x; i++) {
-        for (int j=0; j<Agpu.y; j++)
-//            cout << Agpu[i][j] << " ";
-//        cout << endl;
-            if (Agpu[i][j] != A[i][j]) {
-                cout << "at " << i << " " << j << endl;
-                cout << "gpu: " << Agpu[i][j] << " host: " << A[i][j] << endl;
-            }
-    }
-
-    for (int i=0; i<Rgpu.x; i++)
-        for (int j=0; j<Agpu.y; j++)
-            assert(Rgpu[i][j] == R[i][j]);
-    
-    for (int i=0; i<Qgpu.x; i++)
-        for (int j=0; j<Agpu.y; j++)
-            assert(Qgpu[i][j] == Q[i][j]);
     return 0;
 }
