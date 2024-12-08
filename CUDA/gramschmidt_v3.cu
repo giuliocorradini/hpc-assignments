@@ -162,7 +162,7 @@ __global__ void init_col_k_q(DATA_TYPE *__restrict__ a, DATA_TYPE *__restrict__ 
         q[a_row*nj + k] = a[a_row*nj + k] / sqrt(r[k*ni+k]);
     }
 }
-__global__ void dot_product_a_q(DATA_TYPE *__restrict__ a, DATA_TYPE *__restrict__ r, DATA_TYPE *__restrict__ q, int ni, int nj, int k) {
+__global__ void column_product_a_q(DATA_TYPE *__restrict__ a, DATA_TYPE *__restrict__ r, DATA_TYPE *__restrict__ q, int ni, int nj, int k) {
     //porto in memlria 32 valori di a
     __shared__ DATA_TYPE s_q_col_k[BLOCK_SIZE];
 
@@ -242,7 +242,6 @@ int main(int argc, char** argv)
     gpuErrchk(cudaMemcpy(d_q, q, sizeof(DATA_TYPE) * ni * nj, cudaMemcpyHostToDevice));
     //compute the factorization
 
-    int num_blocks;
     for (int k = 0; k < nj; k++) {
         //KERNEL PER CALCOLO DI NORM A - DIM BLOCK limitata a 32*1
         //uso un thread per riga
@@ -259,7 +258,7 @@ int main(int argc, char** argv)
         //serve un thread per colonna
         dim3 dimBlock_a_q(1,BLOCK_SIZE);
         dim3 dimGrid_a_q(nj-k,(ni-k + BLOCK_SIZE-1)/BLOCK_SIZE);
-        dot_product_a_q<<<dimGrid_a_q, dimBlock_a_q>>>(d_a, d_r, d_q, ni, nj, k);
+        column_product_a_q<<<dimGrid_a_q, dimBlock_a_q>>>(d_a, d_r, d_q, ni, nj, k);
         gpuErrchk(cudaPeekAtLastError());
 
         //AVENDO IN R IL PRODOTTO SCALARE POSSO AGGIORNARE A, stavolta con un kernel parallelo
