@@ -13,8 +13,6 @@ __global__ void column_norm(DeviceArr2D A, DeviceArr2D R, int k) {
     __shared__ DATA_TYPE norm[BLOCK_DIM];
     norm[threadIdx.x] = 0;
 
-    //IMPROVEMENT: bring A^(k) in shmem
-
     int SUBCOL_DIM = floordiv(A.y, blockDim.x);
 
     for (int ly=threadIdx.x; ly < threadIdx.x + SUBCOL_DIM; ly++) {
