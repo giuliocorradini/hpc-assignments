@@ -126,13 +126,10 @@ CUDA IMPLEMENTATION
 namespace cg = cooperative_groups;
 
 __global__ void norma_a(DATA_TYPE *__restrict__ a, DATA_TYPE *__restrict__ r, int ni, int nj, int k) {
-
     //porto in memlria 32 valori di a
     __shared__ DATA_TYPE s_a_col_k[BLOCK_SIZE];
+    int a_row = blockDim.y * blockIdx.y + threadIdx.y;
 
-    int a_row = blockDim.y* blockIdx.y + threadIdx.y;
-    int y_thread = threadIdx.y;
-    int x_thread = threadIdx.x;
     if(a_row < ni){
         s_a_col_k[threadIdx.y] = a[a_row + k];
         s_a_col_k[threadIdx.y] *= s_a_col_k[threadIdx.y];
@@ -146,16 +143,14 @@ __global__ void norma_a(DATA_TYPE *__restrict__ a, DATA_TYPE *__restrict__ r, in
     //ad un normale calcolo di norm
     //infine viene eseguita un unica atomic add sul valore in memoria globale 
     if(a_row < ni){
-        for(int i = 2; i <= blockIdx.y; i*=2){
-            if(y_thread % i == 0){
-                s_a_col_k[y_thread] += s_a_col_k[y_thread+(i/2)];
-            }
-           __syncthreads(); 
+        for (int b=blockDim.y / 2; b>0; b >>= 1) {  //  funnel pattern of reduction
+            if (threadIdx.y < b)
+                s_a_col_k[threadIdx.y] += s_a_col_k[threadIdx.y + b];
+            __syncthreads();
         }
-        //alla fine 1 thread (il primo) svolge l'atomic add per r
-        //dovrebbe bastare solo il controllo sulle x, ma viva la paranoia
-        if(y_thread==0 && x_thread == 0){
-            atomicAdd(&r[k*ni+k], s_a_col_k[y_thread]);
+
+        if(threadIdx.y==0 && threadIdx.x == 0){
+            atomicAdd(&r[k*ni+k], s_a_col_k[0]);
         }
     }
 }
@@ -168,17 +163,12 @@ __global__ void init_col_k_q(DATA_TYPE *__restrict__ a, DATA_TYPE *__restrict__ 
     }
 }
 __global__ void dot_product_a_q(DATA_TYPE *__restrict__ a, DATA_TYPE *__restrict__ r, DATA_TYPE *__restrict__ q, int ni, int nj, int k) {
-
-    
     //porto in memlria 32 valori di a
     __shared__ DATA_TYPE s_q_col_k[BLOCK_SIZE];
 
     //Porto in memoria condivisa le sezioni di interesse di a e q
     int a_row = blockDim.y* blockIdx.y + threadIdx.y;
-    int a_col = blockDim.x* blockIdx.y + threadIdx.x;
-    //coordinate del thread, per chiarezza
-    int y_thread = threadIdx.y;
-    int x_thread = threadIdx.x;
+    int a_col = k + blockIdx.x * blockDim.x;
     if(a_row < ni){
         //DATO CHE A è letta solo una volta, non serve portarla in memoria condivisa
         s_q_col_k[threadIdx.y] = a[a_row + a_col] * q[a_row + k];
@@ -187,16 +177,14 @@ __global__ void dot_product_a_q(DATA_TYPE *__restrict__ a, DATA_TYPE *__restrict
 
     //RIDUCZIONE AD IMBUTO
     if(a_row < ni){
-        for(int i = 2; i <= blockIdx.y; i*=2){
-            if(y_thread % i == 0){
-                s_q_col_k[y_thread] += s_q_col_k[y_thread+(i/2)];
-            }
-           __syncthreads(); 
+        for (int b=blockDim.y / 2; b>0; b >>= 1) {  //  funnel pattern of reduction
+            if (threadIdx.y < b)
+                s_q_col_k[threadIdx.y] += s_q_col_k[threadIdx.y + b];
+            __syncthreads();
         }
-        //alla fine l'ultimo del blocco thread aggiorna la memoria condivisa
-        if(y_thread==0 && x_thread == 0){
-            atomicAdd(&r[k*ni+a_col], s_q_col_k[y_thread]);
-        }
+
+        if (threadIdx.y == 0)
+            atomicAdd(&r[k*ni + a_col],s_q_col_k[0]);
     }
 }
 
@@ -258,18 +246,20 @@ int main(int argc, char** argv)
     for (int k = 0; k < nj; k++) {
         //KERNEL PER CALCOLO DI NORM A - DIM BLOCK limitata a 32*1
         //uso un thread per riga
-        num_blocks = (ni + BLOCK_SIZE - 1) / BLOCK_SIZE;
-        norma_a<<<num_blocks, BLOCK_SIZE>>>(d_a, d_r, ni, nj, k);
+        dim3 dimBlock_norm_initq(1,BLOCK_SIZE);
+        dim3 dimGrid_norm_initq(1,(ni-k + BLOCK_SIZE-1)/BLOCK_SIZE);
+        norma_a<<<dimGrid_norm_initq, dimBlock_norm_initq>>>(d_a, d_r, ni, nj, k);
         gpuErrchk(cudaPeekAtLastError());
         
         //INIZIALIZZO COLONNA k DI Q - La grid ha la stessa dimensione
-        init_col_k_q<<<num_blocks, BLOCK_SIZE>>>(d_a, d_r, d_q, ni, nj, k);
+        init_col_k_q<<<dimBlock_norm_initq, dimBlock_norm_initq>>>(d_a, d_r, d_q, ni, nj, k);
         gpuErrchk(cudaPeekAtLastError());
         
         //DOPO che tutti i tread hanno scritto su A setto la radice
         //serve un thread per colonna
-        num_blocks = (nj + BLOCK_SIZE - 1) / BLOCK_SIZE;
-        dot_product_a_q<<<num_blocks, BLOCK_SIZE>>>(d_a, d_r, d_q, ni, nj, k);
+        dim3 dimBlock_a_q(1,BLOCK_SIZE);
+        dim3 dimGrid_a_q(nj-k,(ni-k + BLOCK_SIZE-1)/BLOCK_SIZE);
+        dot_product_a_q<<<dimGrid_a_q, dimBlock_a_q>>>(d_a, d_r, d_q, ni, nj, k);
         gpuErrchk(cudaPeekAtLastError());
 
         //AVENDO IN R IL PRODOTTO SCALARE POSSO AGGIORNARE A, stavolta con un kernel parallelo
