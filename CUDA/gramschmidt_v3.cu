@@ -167,7 +167,7 @@ __global__ void column_product_a_q(DATA_TYPE *__restrict__ a, DATA_TYPE *__restr
     __shared__ DATA_TYPE s_q_col_k[BLOCK_SIZE];
 
     //Porto in memoria condivisa le sezioni di interesse di a e q
-    int a_row = blockDim.y* blockIdx.y + threadIdx.y;
+    int a_row = (blockDim.y* blockIdx.y + threadIdx.y)*ni;
     int a_col = k + blockIdx.x * blockDim.x;
     if(a_row < ni){
         //DATO CHE A è letta solo una volta, non serve portarla in memoria condivisa
@@ -190,15 +190,15 @@ __global__ void column_product_a_q(DATA_TYPE *__restrict__ a, DATA_TYPE *__restr
 
 __global__ void update_a(DATA_TYPE *__restrict__ a, DATA_TYPE *__restrict__ r, DATA_TYPE *__restrict__ q, int ni, int nj, int k) {
     
-    int a_row = blockDim.y*blockIdx.y + threadIdx.y;
+    int a_row = (blockDim.y*blockIdx.y + threadIdx.y)*ni;
     //offset dovuto a k per tenere conto del restringimento della grid
     int a_col = (k/blockDim.x) + blockDim.x*blockIdx.x + threadIdx.x;
 
     if(a_col > k && a_row < ni){
         //è per chiarezza, il compilatore poi propaga il valore
-        DATA_TYPE result = a[a_row*ni + a_col] - q[a_row*ni + k] * r[k*ni+a_col];
+        DATA_TYPE result = a[a_row + a_col] - q[a_row + k] * r[k*ni+a_col];
         //aggiorno il valore, non c'è concorrenza stavolta
-        a[a_row*ni + a_col] = result;
+        a[a_row + a_col] = result;
     }
 
 }
@@ -261,7 +261,7 @@ int main(int argc, char** argv)
         //KERNEL PER CALCOLO DI NORM A - DIM BLOCK limitata a 32*1
         //uso un thread per riga
         dim3 dimBlock_norm_initq(1,BLOCK_SIZE);
-        dim3 dimGrid_norm_initq(1,(ni-k + BLOCK_SIZE-1)/BLOCK_SIZE);
+        dim3 dimGrid_norm_initq(1,(ni + BLOCK_SIZE-1)/BLOCK_SIZE);
         norma_a<<<dimGrid_norm_initq, dimBlock_norm_initq>>>(d_a, d_r, ni, nj, k);
         gpuErrchk(cudaPeekAtLastError());
         
@@ -272,7 +272,7 @@ int main(int argc, char** argv)
         //DOPO che tutti i tread hanno scritto su A setto la radice
         //serve un thread per colonna
         dim3 dimBlock_a_q(1,BLOCK_SIZE);
-        dim3 dimGrid_a_q(nj-k,(ni-k + BLOCK_SIZE-1)/BLOCK_SIZE);
+        dim3 dimGrid_a_q(nj-k,(ni + BLOCK_SIZE-1)/BLOCK_SIZE);
         column_product_a_q<<<dimGrid_a_q, dimBlock_a_q>>>(d_a, d_r, d_q, ni, nj, k);
         gpuErrchk(cudaPeekAtLastError());
 
@@ -280,7 +280,7 @@ int main(int argc, char** argv)
         //le dimensioni sono le stesse dell'operazione precedente
         //la griglia si restringe con l'aumentare di k per creare solo i thread necessari
         dim3 dimBlock(BLOCK_SIZE,BLOCK_SIZE);
-        dim3 dimGrid((nj + BLOCK_SIZE - 1 - k)/BLOCK_SIZE, ((ni + BLOCK_SIZE - 1)/BLOCK_SIZE));
+        dim3 dimGrid((nj - k + BLOCK_SIZE - 1)/BLOCK_SIZE, ((ni + BLOCK_SIZE - 1)/BLOCK_SIZE));
         update_a<<<dimGrid, dimBlock>>>(d_a, d_r, d_q, ni, nj, k);
         gpuErrchk(cudaPeekAtLastError());
     
