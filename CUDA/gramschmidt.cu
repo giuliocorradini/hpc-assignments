@@ -2,29 +2,9 @@
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
-#include <cuda_runtime.h>
 
 #include <iostream>
-
-#define gpuErrchk(ans)                        \
-    {                                         \
-        gpuAssert((ans), __FILE__, __LINE__); \
-    }
-static inline void gpuAssert(cudaError_t code, const char *file, int line, bool abort = true)
-{
-    if (code != cudaSuccess)
-    {
-        fprintf(stderr, "GPUassert: %s %s %d\n", cudaGetErrorString(code), file, line);
-        if (abort)
-            exit(code);
-    }
-}
-
-#ifndef BLOCK_SIZE
-#define BLOCK_SIZE 32
-#endif
-#define NTHREADS 4
-
+#include <cassert>
 using namespace std;
 
 /* Include benchmark-specific header. */
@@ -38,18 +18,12 @@ extern "C"
 #include "utils.h"
 }
 
-/**Funzione per trasformare la matrice in trasposta */
-static void transpose_matrix(int ni, int nj, DATA_TYPE* M, DATA_TYPE* M_T)
-{
-    // Transpose the matrix M, to read its columns into cache as rows
-#pragma omp parallel for simd num_threads(NTHREADS) schedule(static) collapse(2)
-    for (int i = 0; i < ni; i++) {
-        for (int j = 0; j < nj; j++) {
-            M_T[j * nj + i] = M[i * ni + j];
-        }
-    }
-}
+#ifndef BLOCK_DIM
+#define BLOCK_DIM 32
+#endif
 
+#include "host_kernel.h"
+#include "gramschmidt_kernel.cuh"
 
 /* Array initialization. */
 static void init_array(int ni, int nj, Arr2D &A, Arr2D &R, Arr2D &Q) {
@@ -93,28 +67,14 @@ static void print_array(int ni, int nj, Arr2D &A, Arr2D &R, Arr2D &Q) {
     cout << endl;
 }
 
-/* Main computational kernel. The whole function will be timed,
-   including the call and return. */
-static void kernel_gramschmidt(int ni, int nj, Arr2D &A, Arr2D &R, Arr2D &Q) {
-    int i, j, k;
-
-    DATA_TYPE nrm;
-
-    for (k = 0; k < nj; k++) {
-        // Consideriamo la colonna k-esima di A
-        nrm = 0;
-
-        //  Calcoliamo la norma di A^(k)
-        for (i = 0; i < ni; i++)
-            nrm += A[k][i] * A[k][i];
-
-        //  che viene salvata in nel k-esimo elemento diagonale di R
-        R[k][k] = sqrt(nrm);
-
-        // la k-esima colonna di Q è la normalizzazione della k-esima colonna di A
-        // R[k][k] è una very busy expression
-        for (i = 0; i < ni; i++)
-            Q[k][i] = A[k][i] / R[k][k];
+/**
+ *  Host function for gramschmidt computation. Kernels are launched from host with VRAM resident data
+ *  TODO: stream operations
+ */
+void cu_gramschmidt(Arr2D &A, Arr2D &R, Arr2D &Q) {
+    DeviceArr2D dA(A.x, A.y);
+    DeviceArr2D dR(R.x, R.y);
+    DeviceArr2D dQ(Q.x, Q.y);
 
     cudaMemcpy(dA.arr, A.arr, sizeof(DATA_TYPE) * A.x * A.y, cudaMemcpyHostToDevice);
     
@@ -122,14 +82,12 @@ static void kernel_gramschmidt(int ni, int nj, Arr2D &A, Arr2D &R, Arr2D &Q) {
         column_norm<<<1, BLOCK_DIM>>>(dA, dR, k);
         copy_to_q<<<floordiv(A.y, BLOCK_DIM), BLOCK_DIM>>>(dA, dR, dQ, k);
 
-            // R alla riga k, colonna j è il prodotto della k-esima colonna di Q per la j-esima colonna di A
-            for (i = 0; i < ni; i++)
-                R[k][j] += Q[k][i] * A[j][i];
+        // Operations on A right edge
+        dim3 block(BLOCK_DIM, BLOCK_DIM);
+        dim3 column_grid(floordiv(A.x-k, BLOCK_DIM), floordiv(A.y, BLOCK_DIM));
+        recompute<<<column_grid, block>>>(dA, dR, dQ, k);
 
-            // aggiorno la colonna i-esima di A con il prodotto element-wise tra colonna k-esima di Q e j-esima di R
-            for (i = 0; i < ni; i++)
-                A[j][i] = A[j][i] - Q[k][i] * R[k][j];
-        }
+        update_a<<<column_grid, block>>>(dA, dR, dQ, k);
     }
     
     cudaMemcpy(A.arr, dA.arr, sizeof(DATA_TYPE) * A.x * A.y, cudaMemcpyDeviceToHost);
@@ -141,29 +99,6 @@ static void kernel_gramschmidt(int ni, int nj, Arr2D &A, Arr2D &R, Arr2D &Q) {
     dQ.free();
 }
 
-/**********************************************
-
-CUDA IMPLEMENTATION
-
-**********************************************/
-__global__ void compute_a(DATA_TYPE *__restrict__ a, DATA_TYPE *__restrict__ r, DATA_TYPE *__restrict__ q, int ni, int nj, int k) {
-    
-    int ay_offset = BLOCK_SIZE*blockIdx.y*nj + BLOCK_SIZE*threadIdx.y;
-    int ax_offset = BLOCK_SIZE*blockIdx.x + threadIdx.x;
-
-    int qy_offset = ay_offset;
-    int qx_offset = k;
-
-    int ry_offset = k*ni;
-    int rx_offset = ax_offset;
-
-    //viengono aggiornati solo i dati relativi all'intervallo [k+1 , nj[
-    if(ax_offset > k && ax_offset < nj)
-        a[ay_offset + ax_offset] -= q[qy_offset + qx_offset] * r[ry_offset+rx_offset];
-
-}
-
-
 int main(int argc, char** argv)
 {
     /* Retrieve problem size. */
@@ -173,8 +108,6 @@ int main(int argc, char** argv)
     Arr2D A(ni, nj);
     Arr2D R(nj, nj);
     Arr2D Q(ni, nj);
-    Arr2D A_T(ni, nj);
-    Arr2D Q_T(ni, nj);
 
     Arr2D Agpu(ni, nj);
     Arr2D Rgpu(nj, nj);
@@ -190,113 +123,34 @@ int main(int argc, char** argv)
     } rt;
     double wt;
 
-
-    DATA_TYPE *ab = A.arr;
-    DATA_TYPE *qb = Q.arr;
-
-    DATA_TYPE *a =A_T.arr;
-    DATA_TYPE *q =Q_T.arr; 
-
-    //transpongo qu per ottimizzare i tempo in memoria
-    transpose_matrix(ni, nj, a, ab);
-    transpose_matrix(ni, nj, q, qb);
-
-    clock_gettime(CLOCK_REALTIME, rt + 0);
-
-    kernel_gramschmidt(ni, nj, A_T, R, Q_T);
-
-    clock_gettime(CLOCK_REALTIME, rt + 1);
-    wt = (rt[1].tv_sec - rt[0].tv_sec) + 1.0e-9 * (rt[1].tv_nsec - rt[0].tv_nsec);
-    printf("gramschmidt (Host) : %9.3f sec %9.1f GFLOPS\n", wt, 2.0 * ni * nj * nj / (1.0e9 * wt));
+    clock_gettime(CLOCK_REALTIME, &rt.start);
+    kernel_gramschmidt(ni, nj, A, R, Q);
+    clock_gettime(CLOCK_REALTIME, &rt.finish);
+    wt = (rt.finish.tv_sec - rt.start.tv_sec) + 1.0e-9 * (rt.finish.tv_nsec - rt.start.tv_nsec);
+    printf("gramschmidt (Host) : %9.3f sec %9.1f GFLOPS\n", wt, 2.0 * ni * nj * nj / (1.0e9 * wt)); //TODO: compute GFLOPS correctly
     
-    //CUDA VERSION
-    //Reinizializza matrici
-    init_array(ni, nj, A, R, Q);
+    clock_gettime(CLOCK_REALTIME, &rt.start);
+    cu_gramschmidt(Agpu, Rgpu, Qgpu);
+    clock_gettime(CLOCK_REALTIME, &rt.finish);
+    wt = (rt.finish.tv_sec - rt.start.tv_sec) + 1.0e-9 * (rt.finish.tv_nsec - rt.start.tv_nsec);
+    printf("gramschmidt (Device) : %9.3f sec %9.1f GFLOPS\n", wt, 2.0 * ni * nj * nj / (1.0e9 * wt));
 
-    transpose_matrix(ni, nj, a, ab);
-    transpose_matrix(ni, nj, q, qb);
-
-    DATA_TYPE *r =R.arr; 
-
-    //allocazione memoria A,R,Q (R probabilmente non serve, si può rispatmiare spazio)
-    cudaMallocHost((void **)&a, sizeof(DATA_TYPE) * ni * nj);
-    cudaMallocHost((void **)&r, sizeof(DATA_TYPE) * nj * nj);
-    cudaMallocHost((void **)&q, sizeof(DATA_TYPE) * ni * nj);
-
-    //allocazione memoria GPU
-    DATA_TYPE *d_a, *d_r, *d_q;
-    gpuErrchk(cudaMalloc((void **)&d_a, sizeof(DATA_TYPE) * ni * nj));
-    gpuErrchk(cudaMalloc((void **)&d_r, sizeof(DATA_TYPE) * nj * nj));
-    gpuErrchk(cudaMalloc((void **)&d_q, sizeof(DATA_TYPE) * ni * nj));
-
-    //READY, STEADY, RUN!!!
-    clock_gettime(CLOCK_REALTIME, rt + 0);
-
-    //compute the factorization
-    int i, j, k;
-
-    DATA_TYPE nrm;
-
-    for (k = 0; k < nj; k++) {
-        // Consideriamo la colonna k-esima di A
-        nrm = 0;
-
-        //  Calcoliamo la norma di A^(k)
-        for (i = 0; i < ni; i++)
-            nrm += A_T[k][i] * A_T[k][i];
-
-        //  che viene salvata in nel k-esimo elemento diagonale di R
-        R[k][k] = sqrt(nrm);
-
-        // la k-esima colonna di Q è la normalizzazione della k-esima colonna di A
-        // R[k][k] è una very busy expression
-        for (i = 0; i < ni; i++)
-            Q_T[k][i] = A_T[k][i] / R[k][k];
-
-        // Per ogni colonna successiva alla k-esima (definita nell'outer loop)
-        for (j = k + 1; j < nj; j++) {
-            R[k][j] = 0;
-
-            // R alla riga k, colonna j è il prodotto della k-esima colonna di Q per la j-esima colonna di A
-            for (i = 0; i < ni; i++)
-                R[k][j] += Q_T[k][i] * A_T[j][i];
-        }
-        //questa operazione è fatta nel kernel, non serve ripeterla j volte
-        //PORTO A NEL DEVICE
-        gpuErrchk(cudaMemcpy(d_a, a, sizeof(DATA_TYPE) * ni * nj, cudaMemcpyHostToDevice));
-        gpuErrchk(cudaMemcpy(d_r, r, sizeof(DATA_TYPE) * ni * nj, cudaMemcpyHostToDevice));
-        gpuErrchk(cudaMemcpy(d_q, q, sizeof(DATA_TYPE) * ni * nj, cudaMemcpyHostToDevice));
-        //ESEGUO IL KERNEL
-        dim3 dimBlock(BLOCK_SIZE, BLOCK_SIZE);
-        dim3 dimGrid((ni + (BLOCK_SIZE)-1) / (BLOCK_SIZE), (nj + (BLOCK_SIZE)-1) / (BLOCK_SIZE));
-        compute_a<<<dimGrid, dimBlock>>>(d_a, d_r, d_q, ni, nj, k);
-        gpuErrchk(cudaPeekAtLastError());
-        //RIPORTO A nell'HOST
-        gpuErrchk(cudaMemcpy(a, d_a, sizeof(DATA_TYPE) * nj * nj, cudaMemcpyDeviceToHost));
+    for (int i=0; i<Agpu.x; i++) {
+        for (int j=0; j<Agpu.y; j++)
+//            cout << Agpu[i][j] << " ";
+//        cout << endl;
+            if (Agpu[i][j] != A[i][j]) {
+                cout << "at " << i << " " << j << endl;
+                cout << "gpu: " << Agpu[i][j] << " host: " << A[i][j] << endl;
+            }
     }
-    
-    clock_gettime(CLOCK_REALTIME, rt + 1);
-    wt = (rt[1].tv_sec - rt[0].tv_sec) + 1.0e-9 * (rt[1].tv_nsec - rt[0].tv_nsec);
-    printf("gramschmidt  (GPU) : %9.3f sec %9.1f GFLOPS\n", wt, 2.0 * ni * nj * nj / (1.0e9 * wt));
 
-   
+    for (int i=0; i<Rgpu.x; i++)
+        for (int j=0; j<Agpu.y; j++)
+            assert(Rgpu[i][j] == R[i][j]);
     
-    #ifdef PRINT_DEBUG
-    //ritraspongo le matrici in caso si voglia stamparle
-    transpose_matrix(ni, nj, A_T, A);
-    transpose_matrix(ni, nj, Q_T, Q);
-    
-    print_array(ni, nj, A, R, Q);
-    #endif
-
-    //FREE HOST MEMORY
-    cudaFreeHost(a);
-    cudaFreeHost(r);
-    cudaFreeHost(q);
-    //FREE GPU MEMORY
-    cudaFree(d_a);
-    cudaFree(d_r);
-    cudaFree(d_q);
-
+    for (int i=0; i<Qgpu.x; i++)
+        for (int j=0; j<Agpu.y; j++)
+            assert(Qgpu[i][j] == Q[i][j]);
     return 0;
 }
