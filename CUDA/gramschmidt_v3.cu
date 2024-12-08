@@ -175,7 +175,7 @@ __global__ void column_product_a_q(DATA_TYPE *__restrict__ a, DATA_TYPE *__restr
     }
     __syncthreads();
 
-    //RIDUCZIONE AD IMBUTO
+    //Funnel Reduction
     if(a_row < ni){
         for (int b=blockDim.y / 2; b>0; b >>= 1) {  //  funnel pattern of reduction
             if (threadIdx.y < b)
