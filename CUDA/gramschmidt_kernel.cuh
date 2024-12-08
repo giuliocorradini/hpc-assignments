@@ -65,6 +65,36 @@ __global__ void recompute(DeviceArr2D A, DeviceArr2D R, DeviceArr2D Q, int k) {
     }
 }
 
+__global__ void column_product_a_q(DATA_TYPE *__restrict__ a, DATA_TYPE *__restrict__ r, DATA_TYPE *__restrict__ q, int ni, int nj, int k) {
+    //porto in memlria 32 valori di a
+    __shared__ DATA_TYPE s_q_col_k[BLOCK_DIM];
+
+    int thisCol = blockIdx.x + k;
+    int thisRow = blockIdx.y * blockDim.y + threadIdx.y;
+
+    //Porto in memoria condivisa le sezioni di interesse di a e q
+    int a_row = blockDim.y* blockIdx.y + threadIdx.y;
+    int a_col = k + blockIdx.x * blockDim.x;
+    if(a_row < ni){
+        //DATO CHE A è letta solo una volta, non serve portarla in memoria condivisa
+        s_q_col_k[threadIdx.y] = a[a_row *ni + a_col] * q[a_row *ni + k];
+    }
+    __syncthreads();
+
+    //Funnel Reduction
+    if(a_row < ni){
+        for (int b=blockDim.y / 2; b>0; b >>= 1) {  //  funnel pattern of reduction
+            if (threadIdx.y < b)
+                s_q_col_k[threadIdx.y] += s_q_col_k[threadIdx.y + b];
+            __syncthreads();
+        }
+
+        if (threadIdx.y == 0)
+            atomicAdd(&r[k*ni + a_col],s_q_col_k[0]);
+    }
+}
+
+
 __global__ void update_a(DeviceArr2D A, DeviceArr2D R, DeviceArr2D Q, int k) {
 
     int x = blockIdx.x * blockDim.x + threadIdx.x + k;

@@ -53,36 +53,32 @@ void gold_std(int ni, int nj, Arr2D &A, Arr2D &R, Arr2D &Q) {
 }
 
 
-__global__ void dot_product_a_q(DATA_TYPE *__restrict__ a, DATA_TYPE *__restrict__ r, DATA_TYPE *__restrict__ q, int ni, int nj, int k) {
-
-    
+__global__ void column_product_a_q(DATA_TYPE *__restrict__ a, DATA_TYPE *__restrict__ r, DATA_TYPE *__restrict__ q, int ni, int nj, int k) {
     //porto in memlria 32 valori di a
     __shared__ DATA_TYPE s_q_col_k[BLOCK_DIM];
 
+    int thisCol = blockIdx.x + k;
+    int thisRow = blockIdx.y * blockDim.y + threadIdx.y;
+
     //Porto in memoria condivisa le sezioni di interesse di a e q
     int a_row = blockDim.y* blockIdx.y + threadIdx.y;
-    int a_col = blockDim.x* blockIdx.y + threadIdx.x;
-    //coordinate del thread, per chiarezza
-    int y_thread = threadIdx.y;
-    int x_thread = threadIdx.x;
+    int a_col = k + blockIdx.x * blockDim.x;
     if(a_row < ni){
         //DATO CHE A è letta solo una volta, non serve portarla in memoria condivisa
-        s_q_col_k[threadIdx.y] = a[a_row + a_col] * q[a_row + k];
+        s_q_col_k[threadIdx.y] = a[a_row *ni + a_col] * q[a_row *ni + k];
     }
     __syncthreads();
 
-    //RIDUCZIONE AD IMBUTO
+    //Funnel Reduction
     if(a_row < ni){
-        for(int i = 2; i <= blockIdx.y; i*=2){
-            if(y_thread % i == 0){
-                s_q_col_k[y_thread] += s_q_col_k[y_thread+(i/2)];
-            }
-           __syncthreads(); 
+        for (int b=blockDim.y / 2; b>0; b >>= 1) {  //  funnel pattern of reduction
+            if (threadIdx.y < b)
+                s_q_col_k[threadIdx.y] += s_q_col_k[threadIdx.y + b];
+            __syncthreads();
         }
-        //alla fine l'ultimo del blocco thread aggiorna la memoria condivisa
-        if(y_thread==0 && x_thread == 0){
-            atomicAdd(&r[k*ni+a_col], s_q_col_k[y_thread]);
-        }
+
+        if (threadIdx.y == 0)
+            atomicAdd(&r[k*ni + a_col],s_q_col_k[0]);
     }
 }
 
@@ -123,13 +119,9 @@ void recompute_first_row() {
         column_norm<<<1, BLOCK_DIM>>>(dA, dR, k);
         copy_to_q<<<floordiv(A.y, BLOCK_DIM), BLOCK_DIM>>>(dA, dR, dQ, k);
 
-        // Operations on A right edge
-        dim3 block(BLOCK_DIM, BLOCK_DIM);
-        //dim3 column_grid(floordiv(A.x-k, BLOCK_DIM), floordiv(A.y, BLOCK_DIM));
-        dim3 column_grid(1, 1);
-
-        int num_blocks = (DIM + BLOCK_DIM - 1) / BLOCK_DIM;
-        dot_product_a_q<<<num_blocks, BLOCK_DIM>>>(dA.arr, dR.arr, dQ.arr, DIM, DIM, k);
+        dim3 dimBlock_a_q(1,BLOCK_DIM);             //sono colonne verticali
+        dim3 dimGrid_a_q(DIM-k, (DIM + BLOCK_DIM - 1)/BLOCK_DIM);    //1 x #colonne
+        column_product_a_q<<<dimGrid_a_q, dimBlock_a_q>>>(dA.arr, dR.arr, dQ.arr, DIM, DIM, k);
 
         //update_a<<<column_grid, block>>>(dA, dR, dQ, k);
     }
