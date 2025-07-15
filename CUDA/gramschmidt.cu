@@ -79,7 +79,7 @@ void cu_gramschmidt(Arr2D &A, Arr2D &R, Arr2D &Q) {
     cudaMemcpy(dA.arr, A.arr, sizeof(DATA_TYPE) * A.x * A.y, cudaMemcpyHostToDevice);
     
     for (int k=0; k<A.x; k++) {
-        column_norm<<<1, 32>>>(dA, dR, 2);
+        column_norm<<<1, 32>>>(dA, dR, k);
         copy_to_q<<<floordiv(A.y, BLOCK_DIM), BLOCK_DIM>>>(dA, dR, dQ, k);
 
         dim3 dimBlock_a_q(1,BLOCK_DIM);             //sono colonne verticali

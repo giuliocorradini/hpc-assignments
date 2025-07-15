@@ -64,14 +64,12 @@ __global__ void recompute(DeviceArr2D A, DeviceArr2D R, DeviceArr2D Q, int k) {
 }
 
 __global__ void column_product_a_q(DATA_TYPE *__restrict__ a, DATA_TYPE *__restrict__ r, DATA_TYPE *__restrict__ q, int ni, int nj, int k) {
-    //porto in memlria 32 valori di a
+    // Bring Q^(k) to shared memory
     __shared__ DATA_TYPE s_q_col_k[BLOCK_DIM];
 
-    //Porto in memoria condivisa le sezioni di interesse di a e q
     int a_row = blockDim.y* blockIdx.y + threadIdx.y;
     int a_col = k + blockIdx.x * blockDim.x + 1;
-    if(a_row < ni and a_col < nj){  //TODO: check this
-        //DATO CHE A è letta solo una volta, non serve portarla in memoria condivisa
+    if(a_row < ni and a_col < nj) {
         s_q_col_k[threadIdx.y] = a[a_row *ni + a_col] * q[a_row *ni + k];
     }
     __syncthreads();
